@@ -1,36 +1,87 @@
-This is a [Next.js](https://nextjs.org) project bootstrapped with [`create-next-app`](https://nextjs.org/docs/app/api-reference/cli/create-next-app).
+# Invoice + Bank Reconciliation POC
 
-## Getting Started
+This is a Next.js proof-of-concept app that:
+- stores invoices and bank statement rows in PostgreSQL,
+- uses Drizzle ORM for schema + queries,
+- runs a deterministic matching workflow,
+- persists match decisions and updates statuses.
 
-First, run the development server:
+## Stack
+- Next.js App Router
+- PostgreSQL
+- Drizzle ORM + Drizzle Kit
+- TypeScript
+
+## 1) Configure Environment
+Copy `.env.example` to `.env.local` and set your database URL.
 
 ```bash
-npm run dev
-# or
-yarn dev
-# or
-pnpm dev
-# or
-bun dev
+cp .env.example .env.local
 ```
 
-Open [http://localhost:3000](http://localhost:3000) with your browser to see the result.
+## 2) Install Dependencies
 
-You can start editing the page by modifying `app/page.tsx`. The page auto-updates as you edit the file.
+```bash
+pnpm install
+```
 
-This project uses [`next/font`](https://nextjs.org/docs/app/building-your-application/optimizing/fonts) to automatically optimize and load [Geist](https://vercel.com/font), a new font family for Vercel.
+## 3) Generate/Migrate Database
 
-## Learn More
+```bash
+pnpm db:generate
+pnpm db:migrate
+```
 
-To learn more about Next.js, take a look at the following resources:
+## 4) Run the App
 
-- [Next.js Documentation](https://nextjs.org/docs) - learn about Next.js features and API.
-- [Learn Next.js](https://nextjs.org/learn) - an interactive Next.js tutorial.
+```bash
+pnpm dev
+```
 
-You can check out [the Next.js GitHub repository](https://github.com/vercel/next.js) - your feedback and contributions are welcome!
+Open `http://localhost:3000`.
 
-## Deploy on Vercel
+## API Endpoints
+- `POST /api/seed`
+  - clears and seeds demo invoices + bank transactions.
+- `POST /api/reconcile`
+  - runs invoice-to-bank matching and updates row status to `matched`.
+- `GET /api/dashboard`
+  - returns summary, all rows, and recent match decisions.
+- `POST /api/upload/invoices`
+  - imports invoice CSV rows.
+- `POST /api/upload/transactions`
+  - imports bank transaction CSV rows.
 
-The easiest way to deploy your Next.js app is to use the [Vercel Platform](https://vercel.com/new?utm_medium=default-template&filter=next.js&utm_source=create-next-app&utm_campaign=create-next-app-readme) from the creators of Next.js.
+## CSV Format
+Upload invoice CSV with headers:
 
-Check out our [Next.js deployment documentation](https://nextjs.org/docs/app/building-your-application/deploying) for more details.
+```csv
+invoice_number,vendor_name,issue_date,due_date,amount,currency
+INV-2001,Acme Corp,2026-02-01,2026-02-10,250.00,USD
+```
+
+Upload bank transaction CSV with headers:
+
+```csv
+transaction_date,description,invoice_number,amount,currency
+2026-02-02,ACH ACME CORP INV-2001,INV-2001,250.00,USD
+```
+
+Notes:
+- Date format must be `YYYY-MM-DD`.
+- `amount` is parsed as dollars and converted to cents.
+- `currency` is optional and defaults to `USD`.
+- `invoice_number` on transaction CSV is optional but strongly recommended for high-confidence matching.
+
+## Matching Logic (POC)
+An invoice and transaction match when:
+- amount matches exactly,
+- transaction date is within 14 days of invoice issue date,
+- exact `invoice_reference` (`invoice_number`) match on transaction gives the highest score boost,
+- plus optional score boosts for vendor token overlap and invoice reference in bank description.
+
+Matches are persisted in `reconciliation_matches`; source rows are updated to status `matched`.
+
+## Notes
+- This is intentionally simple and deterministic for demonstration.
+- Production reconciliation should include confidence thresholds, approval queues, and audit/versioning details.
