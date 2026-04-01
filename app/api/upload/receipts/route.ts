@@ -172,11 +172,52 @@ function similarityScore(a: string, b: string): number {
   return same / maxLen;
 }
 
+function normalizeText(value?: string): string {
+  return (value ?? "")
+    .toUpperCase()
+    .replace(/[^A-Z0-9\s]/g, " ")
+    .replace(/\s+/g, " ")
+    .trim();
+}
+
+function textOverlapScore(a: string, b: string): number {
+  if (!a || !b) {
+    return 0;
+  }
+  if (a === b) {
+    return 1;
+  }
+  if (a.includes(b) || b.includes(a)) {
+    return 0.9;
+  }
+
+  const aTokens = new Set(a.split(" ").filter(Boolean));
+  const bTokens = new Set(b.split(" ").filter(Boolean));
+  if (!aTokens.size || !bTokens.size) {
+    return 0;
+  }
+
+  let overlap = 0;
+  aTokens.forEach((token) => {
+    if (bTokens.has(token)) {
+      overlap += 1;
+    }
+  });
+
+  return overlap / Math.max(aTokens.size, bTokens.size);
+}
+
 function resolveMasterInvoice(
   entries: Array<[string, DataMasterRow]>,
   extractedInvoiceNo: string,
   invoiceCandidates: string[] | undefined,
   numericCandidates: string[],
+  context: {
+    customerName: string;
+    city: string;
+    courierName: string;
+    bookingDateSerial: string | number;
+  },
 ): { invoiceNo: string; row: DataMasterRow } | null {
   const normalizedInput = normalizeInvoiceNo(extractedInvoiceNo);
   const normalizedCandidates = (invoiceCandidates ?? [])
@@ -228,7 +269,96 @@ function resolveMasterInvoice(
     }
   }
 
-  return best ? { invoiceNo: best.invoiceNo, row: best.row } : null;
+  if (best) {
+    return { invoiceNo: best.invoiceNo, row: best.row };
+  }
+
+  const normalizedCustomer = normalizeText(context.customerName);
+  const normalizedCity = normalizeText(context.city);
+  const normalizedCourier = normalizeText(context.courierName);
+
+  let contextualBest: {
+    invoiceNo: string;
+    row: DataMasterRow;
+    score: number;
+  } | null = null;
+
+  for (const [invoiceNo, row] of entries) {
+    const normalizedMaster = normalizeInvoiceNo(invoiceNo);
+    let score = 0;
+
+    for (const candidate of allCandidates) {
+      if (!candidate) {
+        continue;
+      }
+      if (candidate.length >= 4 && normalizedMaster.endsWith(candidate)) {
+        score += 3;
+      } else if (
+        candidate.length >= 6 &&
+        (normalizedMaster.includes(candidate) || candidate.includes(normalizedMaster))
+      ) {
+        score += 2;
+      }
+    }
+
+    if (normalizedCustomer) {
+      const masterCustomer = normalizeText(row.customerName);
+      const masterShipping = normalizeText(row.shippingName);
+      const customerScore = Math.max(
+        textOverlapScore(normalizedCustomer, masterCustomer),
+        textOverlapScore(normalizedCustomer, masterShipping),
+      );
+      if (customerScore >= 0.9) {
+        score += 4;
+      } else if (customerScore >= 0.5) {
+        score += 2;
+      }
+    }
+
+    if (normalizedCity) {
+      const masterCity = normalizeText(row.city);
+      if (masterCity && (masterCity === normalizedCity || masterCity.includes(normalizedCity))) {
+        score += 2;
+      }
+    }
+
+    if (normalizedCourier) {
+      const masterCourier = normalizeText(row.courierName);
+      const courierScore = textOverlapScore(normalizedCourier, masterCourier);
+      if (courierScore >= 0.8) {
+        score += 2;
+      } else if (courierScore >= 0.5) {
+        score += 1;
+      }
+    }
+
+    if (context.bookingDateSerial && row.invoiceDate) {
+      const bookingSerial =
+        typeof context.bookingDateSerial === "number"
+          ? context.bookingDateSerial
+          : Number(context.bookingDateSerial);
+      const masterSerial =
+        typeof row.invoiceDate === "number"
+          ? row.invoiceDate
+          : Number(row.invoiceDate);
+      if (!Number.isNaN(bookingSerial) && !Number.isNaN(masterSerial)) {
+        const dayDiff = Math.abs(bookingSerial - masterSerial);
+        if (dayDiff <= 3) {
+          score += 2;
+        } else if (dayDiff <= 7) {
+          score += 1;
+        }
+      }
+    }
+
+    if (!contextualBest || score > contextualBest.score) {
+      contextualBest = { invoiceNo, row, score };
+    }
+  }
+
+  return contextualBest && contextualBest.score >= 5
+    ? { invoiceNo: contextualBest.invoiceNo, row: contextualBest.row }
+    : null;
 }
 
 function invoiceRowToMasterRow(
@@ -369,6 +499,16 @@ export async function POST(request: Request) {
       invoiceRow.invoiceNumber,
       invoiceRowToMasterRow(invoiceRow),
     ]) as Array<[string, DataMasterRow]>;
+    const invoiceByNormalized = new Map<
+      string,
+      typeof invoices.$inferSelect
+    >();
+    invoiceRows.forEach((invoiceRow) => {
+      const normalized = normalizeInvoiceNo(invoiceRow.invoiceNumber);
+      if (normalized && !invoiceByNormalized.has(normalized)) {
+        invoiceByNormalized.set(normalized, invoiceRow);
+      }
+    });
 
     const mapped = await Promise.all(
       files.map(async (file) => {
@@ -380,10 +520,21 @@ export async function POST(request: Request) {
           mappedFromImage.invoiceNo,
           extraction.invoiceCandidates,
           numericCandidates,
+          {
+            customerName: mappedFromImage.customerName,
+            city: mappedFromImage.city,
+            courierName: mappedFromImage.courierName,
+            bookingDateSerial: mappedFromImage.invoiceDate,
+          },
         );
         const masterRow = masterLookup?.row;
         const dataRow = mergeWithMasterRow(mappedFromImage, masterRow);
-        const resolvedInvoiceNo = normalizeInvoiceNo(dataRow.invoiceNo);
+        const resolvedInvoiceNo = normalizeInvoiceNo(
+          masterLookup?.invoiceNo || dataRow.invoiceNo,
+        );
+        const matchedInvoice = resolvedInvoiceNo
+          ? invoiceByNormalized.get(resolvedInvoiceNo)
+          : undefined;
         const transactionHits = transactions.filter((tx) => {
           const reference = normalizeInvoiceNo(tx.invoiceReference ?? "");
           const description = normalizeInvoiceNo(tx.description ?? "");
@@ -408,6 +559,17 @@ export async function POST(request: Request) {
             status: tx.status,
             description: tx.description,
           })),
+          invoiceData: matchedInvoice
+            ? {
+                id: matchedInvoice.id,
+                invoiceNumber: matchedInvoice.invoiceNumber,
+                vendorName: matchedInvoice.vendorName,
+                issueDate: matchedInvoice.issueDate,
+                dueDate: matchedInvoice.dueDate,
+                amountCents: matchedInvoice.amountCents,
+                status: matchedInvoice.status,
+              }
+            : null,
           mappedRow: dataRow,
         };
       }),

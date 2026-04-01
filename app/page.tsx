@@ -18,9 +18,19 @@ type DashboardPayload = {
 
 type ReceiptMappingResult = {
   fileName: string;
+  previewUrl?: string;
   matchedFromMaster: boolean;
   masterInvoiceNo: string;
   transactionExists: boolean;
+  invoiceData?: {
+    id: number;
+    invoiceNumber: string;
+    vendorName: string;
+    issueDate: string;
+    dueDate: string;
+    amountCents: number;
+    status: string;
+  } | null;
   mappedRow: {
     invoiceNo: string;
     customerName: string;
@@ -68,6 +78,10 @@ export default function Home() {
   const [receiptMappings, setReceiptMappings] = useState<ReceiptMappingResult[]>(
     [],
   );
+  const [activePreview, setActivePreview] = useState<{
+    url: string;
+    name: string;
+  } | null>(null);
   const invoicesInputRef = useRef<HTMLInputElement | null>(null);
   const receiptsInputRef = useRef<HTMLInputElement | null>(null);
 
@@ -163,7 +177,18 @@ export default function Home() {
         );
       }
 
-      setReceiptMappings(payload.rows ?? []);
+      const previewUrls = receiptFiles.map((file) => URL.createObjectURL(file));
+      setReceiptMappings((previous) => {
+        previous.forEach((row) => {
+          if (row.previewUrl?.startsWith("blob:")) {
+            URL.revokeObjectURL(row.previewUrl);
+          }
+        });
+        return (payload.rows ?? []).map((row, index) => ({
+          ...row,
+          previewUrl: previewUrls[index],
+        }));
+      });
       setReceiptFiles([]);
       setMessageType("success");
       setMessage(payload.message ?? "Receipts processed.");
@@ -180,6 +205,17 @@ export default function Home() {
   useEffect(() => {
     loadDashboard();
   }, []);
+
+  useEffect(
+    () => () => {
+      receiptMappings.forEach((row) => {
+        if (row.previewUrl?.startsWith("blob:")) {
+          URL.revokeObjectURL(row.previewUrl);
+        }
+      });
+    },
+    [receiptMappings],
+  );
 
   return (
     <main className="mx-auto min-h-screen w-full max-w-6xl px-6 py-10">
@@ -309,6 +345,7 @@ export default function Home() {
               <table className="w-full text-sm">
                 <thead className="bg-zinc-50 text-left text-zinc-600">
                   <tr>
+                    <th className="px-4 py-2">Uploaded Image</th>
                     <th className="px-4 py-2">File</th>
                     <th className="px-4 py-2">OCR Invoice</th>
                     <th className="px-4 py-2">Resolved Invoice</th>
@@ -317,12 +354,38 @@ export default function Home() {
                     <th className="px-4 py-2">Customer</th>
                     <th className="px-4 py-2">City</th>
                     <th className="px-4 py-2">Courier</th>
+                    <th className="px-4 py-2">Invoice Data</th>
                   </tr>
                 </thead>
                 <tbody>
                   {receiptMappings.length ? (
-                    receiptMappings.map((row) => (
-                      <tr key={row.fileName} className="border-t border-zinc-100">
+                    receiptMappings.map((row, index) => (
+                      <tr
+                        key={`${row.fileName}-${index}`}
+                        className="border-t border-zinc-100"
+                      >
+                        <td className="px-4 py-2">
+                          {row.previewUrl ? (
+                            <button
+                              type="button"
+                              onClick={() =>
+                                setActivePreview({
+                                  url: row.previewUrl!,
+                                  name: row.fileName,
+                                })
+                              }
+                              className="rounded-md focus:outline-none focus:ring-2 focus:ring-zinc-400"
+                            >
+                              <img
+                                src={row.previewUrl}
+                                alt={row.fileName}
+                                className="h-16 w-16 rounded-md border border-zinc-200 object-cover"
+                              />
+                            </button>
+                          ) : (
+                            "-"
+                          )}
+                        </td>
                         <td className="px-4 py-2">{row.fileName}</td>
                         <td className="px-4 py-2">{row.mappedRow.invoiceNo || "-"}</td>
                         <td className="px-4 py-2">{row.masterInvoiceNo || "-"}</td>
@@ -339,11 +402,32 @@ export default function Home() {
                         <td className="px-4 py-2">
                           {row.mappedRow.courierName || "-"}
                         </td>
+                        <td className="px-4 py-2">
+                          {row.invoiceData ? (
+                            <div className="space-y-1">
+                              <p className="text-xs text-zinc-700">
+                                {row.invoiceData.invoiceNumber}
+                              </p>
+                              <p className="text-xs text-zinc-500">
+                                {row.invoiceData.vendorName}
+                              </p>
+                              <p className="text-xs text-zinc-500">
+                                {row.invoiceData.issueDate} |{" "}
+                                {formatCents(row.invoiceData.amountCents)}
+                              </p>
+                              <p className="text-xs text-zinc-500">
+                                Due: {row.invoiceData.dueDate}
+                              </p>
+                            </div>
+                          ) : (
+                            "-"
+                          )}
+                        </td>
                       </tr>
                     ))
                   ) : (
                     <tr>
-                      <td className="px-4 py-4 text-zinc-500" colSpan={8}>
+                      <td className="px-4 py-4 text-zinc-500" colSpan={10}>
                         No receipt matches yet.
                       </td>
                     </tr>
@@ -354,6 +438,31 @@ export default function Home() {
           </section>
         </>
       )}
+
+      {activePreview ? (
+        <div
+          className="fixed inset-0 z-50 flex items-center justify-center bg-black/70 p-4"
+          onClick={() => setActivePreview(null)}
+        >
+          <div
+            className="relative max-h-[90vh] max-w-[90vw] rounded-lg bg-white p-2"
+            onClick={(event) => event.stopPropagation()}
+          >
+            <button
+              type="button"
+              onClick={() => setActivePreview(null)}
+              className="absolute right-2 top-2 rounded bg-zinc-900 px-2 py-1 text-xs text-white"
+            >
+              Close
+            </button>
+            <img
+              src={activePreview.url}
+              alt={activePreview.name}
+              className="max-h-[85vh] max-w-[85vw] rounded-md object-contain"
+            />
+          </div>
+        </div>
+      ) : null}
     </main>
   );
 }
