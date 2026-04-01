@@ -1,4 +1,4 @@
-import { and, desc, eq, inArray, not, or, sql } from "drizzle-orm";
+import { and, desc, eq, inArray, isNull, not, or, sql } from "drizzle-orm";
 import { NextResponse } from "next/server";
 import { db } from "@/db/client";
 import { bankTransactions, invoices, reconciliationMatches } from "@/db/schema";
@@ -29,7 +29,7 @@ export async function GET() {
       .from(bankTransactions)
       .where(
         or(
-          eq(bankTransactions.invoiceReference, null),
+          isNull(bankTransactions.invoiceReference),
           and(
             not(inArray(bankTransactions.invoiceReference, [...DEMO_INVOICE_NUMBERS])),
             not(eq(bankTransactions.description, "Airport parking")),
