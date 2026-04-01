@@ -1,7 +1,8 @@
 import { NextResponse } from "next/server";
 import { db } from "@/db/client";
-import { bankTransactions } from "@/db/schema";
-import { assertDate, getHeaderMap, parseAmountToCents, parseCsv } from "@/lib/csv";
+import { bankTransactions, reconciliationMatches } from "@/db/schema";
+import { assertDate, getHeaderMap, parseAmountToCents } from "@/lib/csv";
+import { parseTabularUpload } from "@/lib/spreadsheet";
 
 export async function POST(request: Request) {
   try {
@@ -9,13 +10,12 @@ export async function POST(request: Request) {
     const file = formData.get("file");
 
     if (!(file instanceof File)) {
-      return NextResponse.json({ error: "Missing CSV file." }, { status: 400 });
+      return NextResponse.json({ error: "Missing file." }, { status: 400 });
     }
 
-    const csvText = await file.text();
-    const rows = parseCsv(csvText);
+    const rows = await parseTabularUpload(file);
     if (!rows.length) {
-      return NextResponse.json({ error: "CSV is empty." }, { status: 400 });
+      return NextResponse.json({ error: "Uploaded file is empty." }, { status: 400 });
     }
 
     const [headers, ...dataRows] = rows;
@@ -52,10 +52,14 @@ export async function POST(request: Request) {
     });
 
     if (!parsed.length) {
-      return NextResponse.json({ error: "CSV has no data rows." }, { status: 400 });
+      return NextResponse.json({ error: "File has no data rows." }, { status: 400 });
     }
 
-    await db.insert(bankTransactions).values(parsed);
+    await db.transaction(async (tx) => {
+      await tx.delete(reconciliationMatches);
+      await tx.delete(bankTransactions);
+      await tx.insert(bankTransactions).values(parsed);
+    });
 
     return NextResponse.json({
       message: `Imported ${parsed.length} transaction row(s).`,
@@ -63,7 +67,7 @@ export async function POST(request: Request) {
     });
   } catch (error) {
     return NextResponse.json(
-      { error: error instanceof Error ? error.message : "Failed to import transaction CSV." },
+      { error: error instanceof Error ? error.message : "Failed to import transactions file." },
       { status: 400 },
     );
   }

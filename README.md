@@ -41,26 +41,40 @@ pnpm dev
 Open `http://localhost:3000`.
 
 ## API Endpoints
-- `POST /api/seed`
-  - clears and seeds demo invoices + bank transactions.
 - `POST /api/reconcile`
   - runs invoice-to-bank matching and updates row status to `matched`.
 - `GET /api/dashboard`
   - returns summary, all rows, and recent match decisions.
 - `POST /api/upload/invoices`
-  - imports invoice CSV rows.
+  - imports invoice table rows from `.csv` or `.xlsx`,
+  - supports both existing invoice schema headers and `data.xlsx` headers,
+  - replaces existing invoice rows in DB.
 - `POST /api/upload/transactions`
-  - imports bank transaction CSV rows.
+  - imports bank transaction rows from `.csv` or `.xlsx`.
+  - replaces existing bank transaction rows in DB.
+- `POST /api/upload/receipts`
+  - accepts receipt images (`files` form-data, multiple allowed),
+  - runs OCR/field extraction (OpenAI vision, with fallback invoice candidates for unclear images),
+  - maps extracted values into `data.xlsx` column shape,
+  - checks whether a corresponding bank transaction exists.
 
-## CSV Format
-Upload invoice CSV with headers:
+## Invoices File Format (.csv/.xlsx)
+Supported header formats:
 
+1) Standard schema:
 ```csv
 invoice_number,vendor_name,issue_date,due_date,amount,currency
 INV-2001,Acme Corp,2026-02-01,2026-02-10,250.00,USD
 ```
 
-Upload bank transaction CSV with headers:
+2) `data.xlsx` style:
+```csv
+Invoice No,Invoice Date,Parcel Dtls,Customer Code,Customer Name,Shipping Name,City,Courier Name,Header Remark,Remarks
+1252684084,46107,240864(),1359,GOOD HOMES FURNITURE (DAVANAGERE),GOOD HOMES FURNITURE (Davanagere),DAVANAGERE,SRE CARGO CARRIERS,1r,YES
+```
+
+## Transactions File Format (.csv/.xlsx)
+Upload bank transactions with headers:
 
 ```csv
 transaction_date,description,invoice_number,amount,currency
@@ -71,7 +85,28 @@ Notes:
 - Date format must be `YYYY-MM-DD`.
 - `amount` is parsed as dollars and converted to cents.
 - `currency` is optional and defaults to `USD`.
-- `invoice_number` on transaction CSV is optional but strongly recommended for high-confidence matching.
+- `invoice_number` on transactions file is optional but strongly recommended for high-confidence matching.
+
+## Receipt Image Mapping (Admin)
+For transport receipts like SRE/PSR slips, use the UI section:
+- `Import Receipt Images (Admin)` and click `Map Receipt Fields`.
+- Receipt verification is performed against invoices already uploaded to DB.
+
+The API returns rows with this column order:
+- `Invoice No`
+- `Invoice Date` (Excel serial date)
+- `Parcel Dtls`
+- `Customer Code`
+- `Customer Name`
+- `Shipping Name`
+- `City`
+- `Courier Name`
+- `Header Remark`
+- `Remarks`
+
+Environment:
+- `OPENAI_API_KEY` is required for OCR extraction.
+- `OPENAI_MODEL` is optional (default: `gpt-4.1-mini`).
 
 ## Matching Logic (POC)
 An invoice and transaction match when:

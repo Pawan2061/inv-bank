@@ -1,11 +1,17 @@
-import { desc, sql } from "drizzle-orm";
+import { and, desc, eq, inArray, not, or, sql } from "drizzle-orm";
 import { NextResponse } from "next/server";
 import { db } from "@/db/client";
 import { bankTransactions, invoices, reconciliationMatches } from "@/db/schema";
 
+const DEMO_INVOICE_NUMBERS = ["INV-1001", "INV-1002", "INV-1003", "INV-1004"] as const;
+
 export async function GET() {
   const [invoiceRows, transactionRows, matchRows, invoiceSummary, transactionSummary] = await Promise.all([
-    db.select().from(invoices).orderBy(desc(invoices.createdAt)),
+    db
+      .select()
+      .from(invoices)
+      .where(not(inArray(invoices.invoiceNumber, [...DEMO_INVOICE_NUMBERS])))
+      .orderBy(desc(invoices.createdAt)),
     db.select().from(bankTransactions).orderBy(desc(bankTransactions.createdAt)),
     db.select().from(reconciliationMatches).orderBy(desc(reconciliationMatches.createdAt)).limit(10),
     db
@@ -13,18 +19,38 @@ export async function GET() {
         total: sql<number>`count(*)`,
         matched: sql<number>`count(*) filter (where ${invoices.status} = 'matched')`,
       })
-      .from(invoices),
+      .from(invoices)
+      .where(not(inArray(invoices.invoiceNumber, [...DEMO_INVOICE_NUMBERS]))),
     db
       .select({
         total: sql<number>`count(*)`,
         matched: sql<number>`count(*) filter (where ${bankTransactions.status} = 'matched')`,
       })
-      .from(bankTransactions),
+      .from(bankTransactions)
+      .where(
+        or(
+          eq(bankTransactions.invoiceReference, null),
+          and(
+            not(inArray(bankTransactions.invoiceReference, [...DEMO_INVOICE_NUMBERS])),
+            not(eq(bankTransactions.description, "Airport parking")),
+          ),
+        ),
+      ),
   ]);
+
+  const filteredTransactions = transactionRows.filter((row) => {
+    if (row.description === "Airport parking") {
+      return false;
+    }
+    if (!row.invoiceReference) {
+      return true;
+    }
+    return !DEMO_INVOICE_NUMBERS.includes(row.invoiceReference as (typeof DEMO_INVOICE_NUMBERS)[number]);
+  });
 
   return NextResponse.json({
     invoices: invoiceRows,
-    transactions: transactionRows,
+    transactions: filteredTransactions,
     recentMatches: matchRows,
     summary: {
       invoices: {
