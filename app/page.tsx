@@ -31,6 +31,11 @@ type ReceiptMappingResult = {
     amountCents: number;
     status: string;
   } | null;
+  tokenUsage?: {
+    inputTokens: number;
+    outputTokens: number;
+    totalTokens: number;
+  };
   mappedRow: {
     invoiceNo: string;
     customerName: string;
@@ -355,6 +360,7 @@ export default function Home() {
                     <th className="px-4 py-2">City</th>
                     <th className="px-4 py-2">Courier</th>
                     <th className="px-4 py-2">Invoice Data</th>
+                    <th className="px-4 py-2">Token Usage</th>
                   </tr>
                 </thead>
                 <tbody>
@@ -423,11 +429,28 @@ export default function Home() {
                             "-"
                           )}
                         </td>
+                        <td className="px-4 py-2">
+                          {row.tokenUsage ? (
+                            <div className="space-y-1">
+                              <p className="text-xs text-zinc-500">
+                                In: {row.tokenUsage.inputTokens}
+                              </p>
+                              <p className="text-xs text-zinc-500">
+                                Out: {row.tokenUsage.outputTokens}
+                              </p>
+                              <p className="text-xs font-medium text-zinc-700">
+                                Total: {row.tokenUsage.totalTokens}
+                              </p>
+                            </div>
+                          ) : (
+                            "-"
+                          )}
+                        </td>
                       </tr>
                     ))
                   ) : (
                     <tr>
-                      <td className="px-4 py-4 text-zinc-500" colSpan={10}>
+                      <td className="px-4 py-4 text-zinc-500" colSpan={11}>
                         No receipt matches yet.
                       </td>
                     </tr>

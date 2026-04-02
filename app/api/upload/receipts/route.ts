@@ -378,7 +378,14 @@ function invoiceRowToMasterRow(
   };
 }
 
-async function extractFromImage(file: File): Promise<ReceiptExtraction> {
+async function extractFromImage(file: File): Promise<{
+  extraction: ReceiptExtraction;
+  tokenUsage: {
+    inputTokens: number;
+    outputTokens: number;
+    totalTokens: number;
+  };
+}> {
   const apiKey = process.env.OPENAI_API_KEY;
   if (!apiKey) {
     throw new HttpError(
@@ -438,6 +445,11 @@ async function extractFromImage(file: File): Promise<ReceiptExtraction> {
 
   const payload = (await response.json()) as {
     output_text?: string;
+    usage?: {
+      input_tokens?: number;
+      output_tokens?: number;
+      total_tokens?: number;
+    };
     output?: Array<{
       content?: Array<{ type?: string; text?: string }>;
     }>;
@@ -460,7 +472,14 @@ async function extractFromImage(file: File): Promise<ReceiptExtraction> {
     );
   }
 
-  return toExtraction(parsed);
+  return {
+    extraction: toExtraction(parsed),
+    tokenUsage: {
+      inputTokens: Number(payload.usage?.input_tokens ?? 0),
+      outputTokens: Number(payload.usage?.output_tokens ?? 0),
+      totalTokens: Number(payload.usage?.total_tokens ?? 0),
+    },
+  };
 }
 
 export async function POST(request: Request) {
@@ -512,7 +531,7 @@ export async function POST(request: Request) {
 
     const mapped = await Promise.all(
       files.map(async (file) => {
-        const extraction = await extractFromImage(file);
+        const { extraction, tokenUsage } = await extractFromImage(file);
         const mappedFromImage = mapReceiptToDataRow(extraction);
         const numericCandidates = collectNumericCandidates(extraction);
         const masterLookup = resolveMasterInvoice(
@@ -570,6 +589,7 @@ export async function POST(request: Request) {
                 status: matchedInvoice.status,
               }
             : null,
+          tokenUsage,
           mappedRow: dataRow,
         };
       }),
