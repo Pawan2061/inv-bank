@@ -14,6 +14,20 @@ type Invoice = {
 
 type DashboardPayload = {
   invoices: Invoice[];
+  whatsappMessages: WhatsAppHistoryRow[];
+};
+
+type WhatsAppHistoryRow = {
+  id: number;
+  messageId: string;
+  fromNumber: string;
+  profileName: string | null;
+  mediaId: string | null;
+  mediaMimeType: string | null;
+  status: string;
+  responseText: string | null;
+  errorMessage: string | null;
+  createdAt: string;
 };
 
 type ReceiptMappingResult = {
@@ -51,6 +65,13 @@ function formatCents(cents: number): string {
     style: "currency",
     currency: "USD",
   }).format(cents / 100);
+}
+
+function formatDateTime(value: string): string {
+  return new Intl.DateTimeFormat("en-US", {
+    dateStyle: "medium",
+    timeStyle: "short",
+  }).format(new Date(value));
 }
 
 async function parseApiResponse(
@@ -332,6 +353,80 @@ export default function Home() {
                     <tr>
                       <td className="px-4 py-4 text-zinc-500" colSpan={4}>
                         No invoices loaded yet.
+                      </td>
+                    </tr>
+                  )}
+                </tbody>
+              </table>
+            </div>
+          </section>
+
+          <section className="mt-6 overflow-hidden rounded-xl border border-zinc-200 bg-white">
+            <header className="border-b border-zinc-200 px-5 py-3">
+              <h3 className="text-base font-semibold text-zinc-900">
+                WhatsApp Automation History
+              </h3>
+            </header>
+            <div className="max-h-80 overflow-auto">
+              <table className="w-full text-sm">
+                <thead className="bg-zinc-50 text-left text-zinc-600">
+                  <tr>
+                    <th className="px-4 py-2">Time</th>
+                    <th className="px-4 py-2">Sender</th>
+                    <th className="px-4 py-2">Media</th>
+                    <th className="px-4 py-2">Status</th>
+                    <th className="px-4 py-2">Reply</th>
+                    <th className="px-4 py-2">Error</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {data?.whatsappMessages?.length ? (
+                    data.whatsappMessages.map((row) => (
+                      <tr key={row.id} className="border-t border-zinc-100">
+                        <td className="whitespace-nowrap px-4 py-2">
+                          {formatDateTime(row.createdAt)}
+                        </td>
+                        <td className="px-4 py-2">
+                          <div className="space-y-1">
+                            <p className="text-xs font-medium text-zinc-800">
+                              {row.profileName || "-"}
+                            </p>
+                            <p className="text-xs text-zinc-500">
+                              {row.fromNumber}
+                            </p>
+                          </div>
+                        </td>
+                        <td className="px-4 py-2">
+                          {row.mediaId ? (
+                            <div className="space-y-1">
+                              <p className="text-xs text-zinc-700">
+                                {row.mediaMimeType || "image"}
+                              </p>
+                              <p className="max-w-48 truncate text-xs text-zinc-500">
+                                {row.mediaId}
+                              </p>
+                            </div>
+                          ) : (
+                            "-"
+                          )}
+                        </td>
+                        <td className="px-4 py-2">
+                          <span className="rounded bg-zinc-100 px-2 py-1 text-xs font-medium text-zinc-700">
+                            {row.status}
+                          </span>
+                        </td>
+                        <td className="max-w-sm whitespace-pre-wrap px-4 py-2 text-xs text-zinc-700">
+                          {row.responseText || "-"}
+                        </td>
+                        <td className="max-w-sm whitespace-pre-wrap px-4 py-2 text-xs text-red-700">
+                          {row.errorMessage || "-"}
+                        </td>
+                      </tr>
+                    ))
+                  ) : (
+                    <tr>
+                      <td className="px-4 py-4 text-zinc-500" colSpan={6}>
+                        No WhatsApp messages processed yet.
                       </td>
                     </tr>
                   )}

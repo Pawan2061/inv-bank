@@ -1,4 +1,4 @@
-import { integer, pgTable, serial, text, timestamp, date } from "drizzle-orm/pg-core";
+import { date, integer, jsonb, pgTable, serial, text, timestamp } from "drizzle-orm/pg-core";
 
 export const invoices = pgTable("invoices", {
   id: serial("id").primaryKey(),
@@ -36,4 +36,20 @@ export const reconciliationMatches = pgTable("reconciliation_matches", {
   matchScore: integer("match_score").notNull(),
   reason: text("reason").notNull(),
   createdAt: timestamp("created_at", { withTimezone: true }).defaultNow().notNull(),
+});
+
+export const whatsappMessages = pgTable("whatsapp_messages", {
+  id: serial("id").primaryKey(),
+  messageId: text("message_id").notNull().unique(),
+  fromNumber: text("from_number").notNull(),
+  profileName: text("profile_name"),
+  mediaId: text("media_id"),
+  mediaMimeType: text("media_mime_type"),
+  mediaSha256: text("media_sha256"),
+  status: text("status").notNull().default("received"),
+  responseText: text("response_text"),
+  errorMessage: text("error_message"),
+  result: jsonb("result"),
+  createdAt: timestamp("created_at", { withTimezone: true }).defaultNow().notNull(),
+  updatedAt: timestamp("updated_at", { withTimezone: true }).defaultNow().notNull(),
 });
