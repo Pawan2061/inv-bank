@@ -1,12 +1,24 @@
 import { and, desc, eq, inArray, isNull, not, or, sql } from "drizzle-orm";
 import { NextResponse } from "next/server";
 import { db } from "@/db/client";
-import { bankTransactions, invoices, reconciliationMatches } from "@/db/schema";
+import {
+  bankTransactions,
+  invoices,
+  reconciliationMatches,
+  whatsappMessages,
+} from "@/db/schema";
 
 const DEMO_INVOICE_NUMBERS = ["INV-1001", "INV-1002", "INV-1003", "INV-1004"] as const;
 
 export async function GET() {
-  const [invoiceRows, transactionRows, matchRows, invoiceSummary, transactionSummary] = await Promise.all([
+  const [
+    invoiceRows,
+    transactionRows,
+    matchRows,
+    whatsappRows,
+    invoiceSummary,
+    transactionSummary,
+  ] = await Promise.all([
     db
       .select()
       .from(invoices)
@@ -14,6 +26,7 @@ export async function GET() {
       .orderBy(desc(invoices.createdAt)),
     db.select().from(bankTransactions).orderBy(desc(bankTransactions.createdAt)),
     db.select().from(reconciliationMatches).orderBy(desc(reconciliationMatches.createdAt)).limit(10),
+    db.select().from(whatsappMessages).orderBy(desc(whatsappMessages.createdAt)).limit(50),
     db
       .select({
         total: sql<number>`count(*)`,
@@ -52,6 +65,7 @@ export async function GET() {
     invoices: invoiceRows,
     transactions: filteredTransactions,
     recentMatches: matchRows,
+    whatsappMessages: whatsappRows,
     summary: {
       invoices: {
         total: Number(invoiceSummary[0]?.total ?? 0),
