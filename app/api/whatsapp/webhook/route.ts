@@ -3,6 +3,7 @@ import { eq } from "drizzle-orm";
 import { NextResponse } from "next/server";
 import { db } from "@/db/client";
 import { whatsappMessages } from "@/db/schema";
+import { appLog } from "@/lib/logger";
 import { HttpError, processReceiptImages } from "@/lib/receipt-processor";
 
 export const runtime = "nodejs";
@@ -37,7 +38,18 @@ type WhatsAppTextMessage = {
   };
 };
 
-type WhatsAppMessage = WhatsAppImageMessage | WhatsAppTextMessage;
+type RawWhatsAppMessage = {
+  id: string;
+  from: string;
+  timestamp?: string;
+  type: string;
+  image?: WhatsAppImageMessage["image"];
+  text?: WhatsAppTextMessage["text"];
+};
+
+type WhatsAppMessage = RawWhatsAppMessage;
+
+type SupportedWhatsAppMessage = WhatsAppImageMessage | WhatsAppTextMessage;
 
 type WhatsAppWebhookPayload = {
   entry?: Array<{
@@ -77,11 +89,19 @@ function phoneNumberId(): string {
 }
 
 function verifyWebhookSignature(rawBody: string, signature: string | null): boolean {
-  const appSecret = process.env.WA_APP_SECRET ?? process.env.SECRET_TOKEN;
+  const appSecret = process.env.WA_APP_SECRET;
   if (!appSecret) {
+    appLog("whatsapp.webhook", "signature_check_skipped_no_app_secret", {
+      hasSignature: Boolean(signature),
+      rawBodyLength: rawBody.length,
+    });
     return true;
   }
   if (!signature?.startsWith("sha256=")) {
+    appLog("whatsapp.webhook", "signature_missing_or_invalid_format", {
+      hasSignature: Boolean(signature),
+      rawBodyLength: rawBody.length,
+    }, "warn");
     return false;
   }
 
@@ -92,10 +112,16 @@ function verifyWebhookSignature(rawBody: string, signature: string | null): bool
   const expectedBuffer = Buffer.from(expected, "hex");
   const receivedBuffer = Buffer.from(received, "hex");
 
-  return (
+  const valid =
     expectedBuffer.length === receivedBuffer.length &&
-    timingSafeEqual(expectedBuffer, receivedBuffer)
-  );
+    timingSafeEqual(expectedBuffer, receivedBuffer);
+
+  appLog("whatsapp.webhook", "signature_check_completed", {
+    valid,
+    rawBodyLength: rawBody.length,
+  }, valid ? "info" : "warn");
+
+  return valid;
 }
 
 function profileNameFor(
@@ -106,7 +132,20 @@ function profileNameFor(
   return contact?.profile?.name ?? null;
 }
 
+function isImageMessage(message: WhatsAppMessage): message is WhatsAppImageMessage {
+  return message.type === "image" && Boolean(message.image?.id);
+}
+
+function isTextMessage(message: WhatsAppMessage): message is WhatsAppTextMessage {
+  return message.type === "text";
+}
+
 async function sendTextMessage(to: string, body: string): Promise<void> {
+  appLog("whatsapp.webhook", "send_text_started", {
+    to,
+    bodyLength: body.length,
+  });
+
   const response = await fetch(`${graphBaseUrl()}/${phoneNumberId()}/messages`, {
     method: "POST",
     headers: {
@@ -127,14 +166,26 @@ async function sendTextMessage(to: string, body: string): Promise<void> {
 
   if (!response.ok) {
     const details = await response.text();
+    appLog("whatsapp.webhook", "send_text_failed", {
+      to,
+      status: response.status,
+      details: details.slice(0, 500),
+    }, "error");
     throw new HttpError(
       response.status,
       `WhatsApp reply failed (${response.status}): ${details.slice(0, 500)}`,
     );
   }
+
+  appLog("whatsapp.webhook", "send_text_completed", {
+    to,
+    status: response.status,
+  });
 }
 
 async function fetchMediaMetadata(mediaId: string): Promise<MediaMetadata> {
+  appLog("whatsapp.webhook", "media_metadata_fetch_started", { mediaId });
+
   const response = await fetch(`${graphBaseUrl()}/${mediaId}`, {
     headers: {
       Authorization: `Bearer ${whatsappToken()}`,
@@ -143,6 +194,11 @@ async function fetchMediaMetadata(mediaId: string): Promise<MediaMetadata> {
 
   if (!response.ok) {
     const details = await response.text();
+    appLog("whatsapp.webhook", "media_metadata_fetch_failed", {
+      mediaId,
+      status: response.status,
+      details: details.slice(0, 500),
+    }, "error");
     throw new HttpError(
       response.status,
       `WhatsApp media lookup failed (${response.status}): ${details.slice(0, 500)}`,
@@ -151,8 +207,19 @@ async function fetchMediaMetadata(mediaId: string): Promise<MediaMetadata> {
 
   const payload = (await response.json()) as Partial<MediaMetadata>;
   if (!payload.url) {
+    appLog("whatsapp.webhook", "media_metadata_missing_url", {
+      mediaId,
+      hasMimeType: Boolean(payload.mime_type),
+      hasSha256: Boolean(payload.sha256),
+    }, "error");
     throw new HttpError(502, "WhatsApp media lookup did not return a URL.");
   }
+
+  appLog("whatsapp.webhook", "media_metadata_fetch_completed", {
+    mediaId,
+    mimeType: payload.mime_type,
+    hasSha256: Boolean(payload.sha256),
+  });
 
   return {
     url: payload.url,
@@ -165,6 +232,11 @@ async function downloadMediaAsFile(
   mediaId: string,
   fallbackMimeType?: string,
 ): Promise<{ file: File; metadata: MediaMetadata }> {
+  appLog("whatsapp.webhook", "media_download_started", {
+    mediaId,
+    fallbackMimeType,
+  });
+
   const metadata = await fetchMediaMetadata(mediaId);
   const mimeType = metadata.mime_type ?? fallbackMimeType ?? "image/jpeg";
   const response = await fetch(metadata.url, {
@@ -175,6 +247,11 @@ async function downloadMediaAsFile(
 
   if (!response.ok) {
     const details = await response.text();
+    appLog("whatsapp.webhook", "media_download_failed", {
+      mediaId,
+      status: response.status,
+      details: details.slice(0, 500),
+    }, "error");
     throw new HttpError(
       response.status,
       `WhatsApp media download failed (${response.status}): ${details.slice(0, 500)}`,
@@ -183,6 +260,12 @@ async function downloadMediaAsFile(
 
   const buffer = Buffer.from(await response.arrayBuffer());
   const extension = mimeType.split("/")[1]?.split(";")[0] ?? "jpg";
+
+  appLog("whatsapp.webhook", "media_download_completed", {
+    mediaId,
+    mimeType,
+    bytes: buffer.byteLength,
+  });
 
   return {
     file: new File([buffer], `whatsapp-${mediaId}.${extension}`, {
@@ -231,19 +314,34 @@ function buildMatchReply(result: Awaited<ReturnType<typeof processReceiptImages>
 }
 
 async function alreadyProcessed(messageId: string): Promise<boolean> {
+  appLog("whatsapp.webhook", "history_duplicate_check_started", { messageId });
+
   const existing = await db
     .select({ id: whatsappMessages.id })
     .from(whatsappMessages)
     .where(eq(whatsappMessages.messageId, messageId))
     .limit(1);
 
-  return existing.length > 0;
+  const duplicate = existing.length > 0;
+  appLog("whatsapp.webhook", "history_duplicate_check_completed", {
+    messageId,
+    duplicate,
+  });
+
+  return duplicate;
 }
 
 async function createHistoryRow(
-  message: WhatsAppMessage,
+  message: SupportedWhatsAppMessage,
   profileName: string | null,
 ): Promise<void> {
+  appLog("whatsapp.webhook", "history_create_started", {
+    messageId: message.id,
+    from: message.from,
+    type: message.type,
+    hasProfileName: Boolean(profileName),
+  });
+
   await db.insert(whatsappMessages).values({
     messageId: message.id,
     fromNumber: message.from,
@@ -253,12 +351,24 @@ async function createHistoryRow(
     mediaSha256: message.type === "image" ? message.image.sha256 ?? null : null,
     status: "received",
   });
+
+  appLog("whatsapp.webhook", "history_create_completed", {
+    messageId: message.id,
+  });
 }
 
 async function updateHistoryRow(
   messageId: string,
   values: Partial<typeof whatsappMessages.$inferInsert>,
 ): Promise<void> {
+  appLog("whatsapp.webhook", "history_update_started", {
+    messageId,
+    status: values.status,
+    hasResponseText: Boolean(values.responseText),
+    hasErrorMessage: Boolean(values.errorMessage),
+    hasResult: Boolean(values.result),
+  });
+
   await db
     .update(whatsappMessages)
     .set({
@@ -266,13 +376,29 @@ async function updateHistoryRow(
       updatedAt: new Date(),
     })
     .where(eq(whatsappMessages.messageId, messageId));
+
+  appLog("whatsapp.webhook", "history_update_completed", {
+    messageId,
+    status: values.status,
+  });
 }
 
 async function handleImageMessage(
   message: WhatsAppImageMessage,
   profileName: string | null,
 ): Promise<void> {
+  appLog("whatsapp.webhook", "image_message_started", {
+    messageId: message.id,
+    from: message.from,
+    mediaId: message.image.id,
+    mimeType: message.image.mime_type,
+    hasProfileName: Boolean(profileName),
+  });
+
   if (await alreadyProcessed(message.id)) {
+    appLog("whatsapp.webhook", "image_message_skipped_duplicate", {
+      messageId: message.id,
+    }, "warn");
     return;
   }
 
@@ -294,6 +420,14 @@ async function handleImageMessage(
     const [result] = await processReceiptImages([file]);
     const responseText = buildMatchReply(result);
 
+    appLog("whatsapp.webhook", "image_message_match_completed", {
+      messageId: message.id,
+      invoiceNumber: result.invoiceData?.invoiceNumber ?? null,
+      masterInvoiceNo: result.masterInvoiceNo,
+      transactionExists: result.transactionExists,
+      matchedFromMaster: result.matchedFromMaster,
+    });
+
     await updateHistoryRow(message.id, {
       status: "sending_reply",
       responseText,
@@ -301,9 +435,16 @@ async function handleImageMessage(
     });
     await sendTextMessage(message.from, responseText);
     await updateHistoryRow(message.id, { status: "replied" });
+    appLog("whatsapp.webhook", "image_message_completed", {
+      messageId: message.id,
+    });
   } catch (error) {
     const errorMessage =
       error instanceof Error ? error.message : "Failed to process WhatsApp image.";
+    appLog("whatsapp.webhook", "image_message_failed", {
+      messageId: message.id,
+      errorMessage,
+    }, "error");
     const responseText =
       error instanceof HttpError && error.status === 400
         ? errorMessage
@@ -318,6 +459,11 @@ async function handleImageMessage(
     try {
       await sendTextMessage(message.from, responseText);
     } catch (replyError) {
+      appLog("whatsapp.webhook", "image_message_failure_reply_failed", {
+        messageId: message.id,
+        errorMessage:
+          replyError instanceof Error ? replyError.message : "unknown error",
+      }, "error");
       await updateHistoryRow(message.id, {
         errorMessage: `${errorMessage}; reply failed: ${
           replyError instanceof Error ? replyError.message : "unknown error"
@@ -331,7 +477,17 @@ async function handleTextMessage(
   message: WhatsAppTextMessage,
   profileName: string | null,
 ): Promise<void> {
+  appLog("whatsapp.webhook", "text_message_started", {
+    messageId: message.id,
+    from: message.from,
+    textLength: message.text?.body?.length ?? 0,
+    hasProfileName: Boolean(profileName),
+  });
+
   if (await alreadyProcessed(message.id)) {
+    appLog("whatsapp.webhook", "text_message_skipped_duplicate", {
+      messageId: message.id,
+    }, "warn");
     return;
   }
 
@@ -343,11 +499,14 @@ async function handleTextMessage(
   });
   await sendTextMessage(message.from, responseText);
   await updateHistoryRow(message.id, { status: "replied" });
+  appLog("whatsapp.webhook", "text_message_completed", {
+    messageId: message.id,
+  });
 }
 
 function extractWebhookMessages(payload: WhatsAppWebhookPayload) {
   const extracted: Array<{
-    message: WhatsAppMessage;
+    message: SupportedWhatsAppMessage;
     profileName: string | null;
   }> = [];
 
@@ -355,7 +514,11 @@ function extractWebhookMessages(payload: WhatsAppWebhookPayload) {
     for (const change of entry.changes ?? []) {
       const value = change.value;
       for (const message of value?.messages ?? []) {
-        if (message.type !== "image" && message.type !== "text") {
+        if (!isImageMessage(message) && !isTextMessage(message)) {
+          appLog("whatsapp.webhook", "message_skipped_unsupported_type", {
+            messageId: message.id,
+            type: message.type,
+          }, "warn");
           continue;
         }
         extracted.push({
@@ -381,22 +544,57 @@ export async function GET(request: Request) {
     token === process.env.WA_HOOKS_VERIFY_TOKEN &&
     challenge
   ) {
+    appLog("whatsapp.webhook", "verification_succeeded", {
+      mode,
+      hasChallenge: Boolean(challenge),
+    });
     return new Response(challenge, { status: 200 });
   }
+
+  appLog("whatsapp.webhook", "verification_failed", {
+    mode,
+    hasToken: Boolean(token),
+    hasExpectedToken: Boolean(process.env.WA_HOOKS_VERIFY_TOKEN),
+    hasChallenge: Boolean(challenge),
+  }, "warn");
 
   return NextResponse.json({ error: "Webhook verification failed." }, { status: 403 });
 }
 
 export async function POST(request: Request) {
+  const startedAt = Date.now();
   const rawBody = await request.text();
   const signature = request.headers.get("x-hub-signature-256");
 
+  appLog("whatsapp.webhook", "post_received", {
+    rawBodyLength: rawBody.length,
+    hasSignature: Boolean(signature),
+    contentType: request.headers.get("content-type"),
+  });
+
   if (!verifyWebhookSignature(rawBody, signature)) {
+    appLog("whatsapp.webhook", "post_rejected_invalid_signature", {
+      rawBodyLength: rawBody.length,
+    }, "warn");
     return NextResponse.json({ error: "Invalid webhook signature." }, { status: 401 });
   }
 
-  const payload = JSON.parse(rawBody) as WhatsAppWebhookPayload;
+  let payload: WhatsAppWebhookPayload;
+  try {
+    payload = JSON.parse(rawBody) as WhatsAppWebhookPayload;
+  } catch (error) {
+    appLog("whatsapp.webhook", "post_invalid_json", {
+      errorMessage: error instanceof Error ? error.message : "unknown error",
+    }, "error");
+    return NextResponse.json({ error: "Invalid JSON body." }, { status: 400 });
+  }
+
   const messages = extractWebhookMessages(payload);
+
+  appLog("whatsapp.webhook", "post_messages_extracted", {
+    messageCount: messages.length,
+    entryCount: payload.entry?.length ?? 0,
+  });
 
   for (const { message, profileName } of messages) {
     if (message.type === "image") {
@@ -405,6 +603,11 @@ export async function POST(request: Request) {
       await handleTextMessage(message, profileName);
     }
   }
+
+  appLog("whatsapp.webhook", "post_completed", {
+    processed: messages.length,
+    durationMs: Date.now() - startedAt,
+  });
 
   return NextResponse.json({ received: true, processed: messages.length });
 }

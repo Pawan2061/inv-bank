@@ -1,5 +1,6 @@
 import { db } from "@/db/client";
 import { bankTransactions, invoices } from "@/db/schema";
+import { appLog } from "@/lib/logger";
 import {
   isoDateToExcelSerial,
   mapReceiptToDataRow,
@@ -419,8 +420,16 @@ async function extractFromImage(file: File): Promise<{
     totalTokens: number;
   };
 }> {
+  appLog("receipt.processor", "ocr_started", {
+    fileName: file.name,
+    mimeType: file.type,
+    size: file.size,
+    model: OPENAI_MODEL,
+  });
+
   const apiKey = process.env.OPENAI_API_KEY;
   if (!apiKey) {
+    appLog("receipt.processor", "ocr_missing_openai_key", undefined, "error");
     throw new HttpError(
       500,
       "OPENAI_API_KEY is missing. Add it in .env.local and restart dev server.",
@@ -470,6 +479,11 @@ async function extractFromImage(file: File): Promise<{
 
   if (!response.ok) {
     const details = await response.text();
+    appLog("receipt.processor", "ocr_failed", {
+      fileName: file.name,
+      status: response.status,
+      details: details.slice(0, 500),
+    }, "error");
     throw new HttpError(
       response.status,
       `OCR extraction failed (${response.status}): ${details.slice(0, 500)}`,
@@ -499,13 +513,17 @@ async function extractFromImage(file: File): Promise<{
 
   const parsed = tryParseJsonObject(outputText);
   if (!parsed) {
+    appLog("receipt.processor", "ocr_parse_failed", {
+      fileName: file.name,
+      outputPreview: outputText.slice(0, 500),
+    }, "error");
     throw new HttpError(
       502,
       "OCR response parsing failed. Try a clearer image or a tighter crop around invoice details.",
     );
   }
 
-  return {
+  const result = {
     extraction: toExtraction(parsed),
     tokenUsage: {
       inputTokens: Number(payload.usage?.input_tokens ?? 0),
@@ -513,13 +531,35 @@ async function extractFromImage(file: File): Promise<{
       totalTokens: Number(payload.usage?.total_tokens ?? 0),
     },
   };
+
+  appLog("receipt.processor", "ocr_completed", {
+    fileName: file.name,
+    invoiceNo: result.extraction.invoiceNo ?? null,
+    candidateCount: result.extraction.invoiceCandidates?.length ?? 0,
+    totalTokens: result.tokenUsage.totalTokens,
+  });
+
+  return result;
 }
 
 export async function processReceiptImages(
   files: File[],
 ): Promise<ReceiptProcessingResult[]> {
+  appLog("receipt.processor", "processing_started", {
+    fileCount: files.length,
+    files: files.map((file) => ({
+      name: file.name,
+      type: file.type,
+      size: file.size,
+    })),
+  });
+
   for (const file of files) {
     if (!file.type.startsWith("image/")) {
+      appLog("receipt.processor", "unsupported_file_type", {
+        fileName: file.name,
+        mimeType: file.type,
+      }, "warn");
       throw new HttpError(
         400,
         `Unsupported file "${file.name}". Please upload image files only.`,
@@ -532,7 +572,13 @@ export async function processReceiptImages(
     db.select().from(invoices),
   ]);
 
+  appLog("receipt.processor", "db_rows_loaded", {
+    transactionCount: transactions.length,
+    invoiceCount: invoiceRows.length,
+  });
+
   if (!invoiceRows.length) {
+    appLog("receipt.processor", "no_invoices_found", undefined, "warn");
     throw new HttpError(400, "No invoices found. Upload invoices table first.");
   }
 
@@ -548,8 +594,12 @@ export async function processReceiptImages(
     }
   });
 
-  return Promise.all(
+  const results = await Promise.all(
     files.map(async (file) => {
+      appLog("receipt.processor", "file_processing_started", {
+        fileName: file.name,
+      });
+
       const { extraction, tokenUsage } = await extractFromImage(file);
       const mappedFromImage = mapReceiptToDataRow(extraction);
       const numericCandidates = collectNumericCandidates(extraction);
@@ -583,7 +633,7 @@ export async function processReceiptImages(
         );
       });
 
-      return {
+      const result = {
         fileName: file.name,
         extraction,
         matchedFromMaster: Boolean(masterRow),
@@ -611,6 +661,24 @@ export async function processReceiptImages(
         tokenUsage,
         mappedRow: dataRow,
       };
+
+      appLog("receipt.processor", "file_processing_completed", {
+        fileName: file.name,
+        extractedInvoiceNo: mappedFromImage.invoiceNo,
+        resolvedInvoiceNo,
+        masterInvoiceNo: result.masterInvoiceNo,
+        matchedInvoiceNumber: result.invoiceData?.invoiceNumber ?? null,
+        transactionHitCount: transactionHits.length,
+      });
+
+      return result;
     }),
   );
+
+  appLog("receipt.processor", "processing_completed", {
+    fileCount: files.length,
+    resultCount: results.length,
+  });
+
+  return results;
 }
