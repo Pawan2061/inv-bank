@@ -568,6 +568,16 @@ async function handleImageMessage(
 
     if (!result.invoiceData) {
       await notifyAdminForUnmatchedReceipt(message, profileName, file, result);
+      await updateHistoryRow(message.id, {
+        status: "forwarded_to_admin",
+        responseText,
+        result,
+      });
+      appLog("whatsapp.webhook", "image_message_forwarded_to_admin", {
+        messageId: message.id,
+        adminNumber: adminWhatsAppNumber(),
+      });
+      return;
     }
 
     appLog("whatsapp.webhook", "image_message_match_completed", {
