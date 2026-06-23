@@ -68,6 +68,12 @@ type MediaMetadata = {
   sha256?: string;
 };
 
+type UploadedMedia = {
+  id?: string;
+};
+
+const DEFAULT_ADMIN_WHATSAPP_NUMBER = "919289037928";
+
 function graphBaseUrl(): string {
   return `https://graph.facebook.com/${process.env.WA_VERSION ?? "v21.0"}`;
 }
@@ -86,6 +92,10 @@ function phoneNumberId(): string {
     throw new HttpError(500, "WA_PHONE_NO_ID is missing.");
   }
   return id;
+}
+
+function adminWhatsAppNumber(): string {
+  return (process.env.ADMIN_WHATSAPP_NUMBER ?? DEFAULT_ADMIN_WHATSAPP_NUMBER).replace(/\D/g, "");
 }
 
 function verifyWebhookSignature(rawBody: string, signature: string | null): boolean {
@@ -178,6 +188,95 @@ async function sendTextMessage(to: string, body: string): Promise<void> {
   }
 
   appLog("whatsapp.webhook", "send_text_completed", {
+    to,
+    status: response.status,
+  });
+}
+
+async function uploadWhatsAppMedia(file: File): Promise<string> {
+  appLog("whatsapp.webhook", "upload_media_started", {
+    fileName: file.name,
+    mimeType: file.type,
+    size: file.size,
+  });
+
+  const formData = new FormData();
+  formData.append("messaging_product", "whatsapp");
+  formData.append("file", file);
+
+  const response = await fetch(`${graphBaseUrl()}/${phoneNumberId()}/media`, {
+    method: "POST",
+    headers: {
+      Authorization: `Bearer ${whatsappToken()}`,
+    },
+    body: formData,
+  });
+
+  if (!response.ok) {
+    const details = await response.text();
+    appLog("whatsapp.webhook", "upload_media_failed", {
+      status: response.status,
+      details: details.slice(0, 500),
+    }, "error");
+    throw new HttpError(
+      response.status,
+      `WhatsApp media upload failed (${response.status}): ${details.slice(0, 500)}`,
+    );
+  }
+
+  const payload = (await response.json()) as UploadedMedia;
+  if (!payload.id) {
+    throw new HttpError(502, "WhatsApp media upload did not return a media id.");
+  }
+
+  appLog("whatsapp.webhook", "upload_media_completed", {
+    mediaId: payload.id,
+  });
+
+  return payload.id;
+}
+
+async function sendImageMessage(to: string, file: File, caption: string): Promise<void> {
+  const mediaId = await uploadWhatsAppMedia(file);
+
+  appLog("whatsapp.webhook", "send_image_started", {
+    to,
+    mediaId,
+    captionLength: caption.length,
+  });
+
+  const response = await fetch(`${graphBaseUrl()}/${phoneNumberId()}/messages`, {
+    method: "POST",
+    headers: {
+      Authorization: `Bearer ${whatsappToken()}`,
+      "Content-Type": "application/json",
+    },
+    body: JSON.stringify({
+      messaging_product: "whatsapp",
+      recipient_type: "individual",
+      to,
+      type: "image",
+      image: {
+        id: mediaId,
+        caption,
+      },
+    }),
+  });
+
+  if (!response.ok) {
+    const details = await response.text();
+    appLog("whatsapp.webhook", "send_image_failed", {
+      to,
+      status: response.status,
+      details: details.slice(0, 500),
+    }, "error");
+    throw new HttpError(
+      response.status,
+      `WhatsApp image send failed (${response.status}): ${details.slice(0, 500)}`,
+    );
+  }
+
+  appLog("whatsapp.webhook", "send_image_completed", {
     to,
     status: response.status,
   });
@@ -293,7 +392,6 @@ function buildMatchReply(result: Awaited<ReturnType<typeof processReceiptImages>
       `Customer: ${result.invoiceData.vendorName}`,
       `Issue date: ${result.invoiceData.issueDate}`,
       `Amount: ${formatCents(result.invoiceData.amountCents)}`,
-      `Transaction found: ${result.transactionExists ? "Yes" : "No"}`,
     ].join("\n");
   }
 
@@ -311,6 +409,54 @@ function buildMatchReply(result: Awaited<ReturnType<typeof processReceiptImages>
     "I could not confidently detect an invoice number from this image.",
     "Please send a clearer photo with the invoice number visible.",
   ].join("\n");
+}
+
+function buildAdminUnmatchedMessage(
+  message: WhatsAppImageMessage,
+  profileName: string | null,
+  result: Awaited<ReturnType<typeof processReceiptImages>>[number],
+): string {
+  const invoiceNo =
+    result.masterInvoiceNo || result.invoiceData?.invoiceNumber || result.mappedRow.invoiceNo;
+
+  return [
+    "Unmatched invoice receipt.",
+    `From: ${message.from}`,
+    `Profile: ${profileName || "-"}`,
+    `Detected invoice: ${invoiceNo || "-"}`,
+    `Customer: ${result.mappedRow.customerName || "-"}`,
+    `City: ${result.mappedRow.city || "-"}`,
+    `Courier: ${result.mappedRow.courierName || "-"}`,
+    `WhatsApp message id: ${message.id}`,
+  ].join("\n");
+}
+
+async function notifyAdminForUnmatchedReceipt(
+  message: WhatsAppImageMessage,
+  profileName: string | null,
+  file: File,
+  result: Awaited<ReturnType<typeof processReceiptImages>>[number],
+): Promise<void> {
+  const adminNumber = adminWhatsAppNumber();
+  if (!adminNumber) {
+    appLog("whatsapp.webhook", "admin_notify_skipped_missing_number", {
+      messageId: message.id,
+    }, "warn");
+    return;
+  }
+
+  const adminMessage = buildAdminUnmatchedMessage(message, profileName, result);
+
+  try {
+    await sendImageMessage(adminNumber, file, adminMessage);
+  } catch (imageError) {
+    appLog("whatsapp.webhook", "admin_notify_image_failed_falling_back_to_text", {
+      messageId: message.id,
+      adminNumber,
+      errorMessage: imageError instanceof Error ? imageError.message : "unknown error",
+    }, "error");
+    await sendTextMessage(adminNumber, adminMessage);
+  }
 }
 
 async function alreadyProcessed(messageId: string): Promise<boolean> {
@@ -419,6 +565,10 @@ async function handleImageMessage(
 
     const [result] = await processReceiptImages([file]);
     const responseText = buildMatchReply(result);
+
+    if (!result.invoiceData) {
+      await notifyAdminForUnmatchedReceipt(message, profileName, file, result);
+    }
 
     appLog("whatsapp.webhook", "image_message_match_completed", {
       messageId: message.id,
