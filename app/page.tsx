@@ -17,6 +17,26 @@ type DashboardPayload = {
   whatsappMessages: WhatsAppHistoryRow[];
 };
 
+type ReceiptResult = {
+  fileName?: string;
+  masterInvoiceNo?: string;
+  invoiceData?: {
+    id: number;
+    invoiceNumber: string;
+    vendorName: string;
+    issueDate: string;
+    dueDate: string;
+    amountCents: number;
+    status: string;
+  } | null;
+  mappedRow?: {
+    invoiceNo?: string;
+    customerName?: string;
+    city?: string;
+    courierName?: string;
+  };
+};
+
 type WhatsAppHistoryRow = {
   id: number;
   messageId: string;
@@ -27,6 +47,7 @@ type WhatsAppHistoryRow = {
   status: string;
   responseText: string | null;
   errorMessage: string | null;
+  result: ReceiptResult | null;
   createdAt: string;
 };
 
@@ -72,6 +93,15 @@ function formatDateTime(value: string): string {
     dateStyle: "medium",
     timeStyle: "short",
   }).format(new Date(value));
+}
+
+function invoiceFromReceiptResult(result?: ReceiptResult | null): string {
+  return (
+    result?.masterInvoiceNo ||
+    result?.invoiceData?.invoiceNumber ||
+    result?.mappedRow?.invoiceNo ||
+    ""
+  );
 }
 
 async function parseApiResponse(
@@ -243,6 +273,12 @@ export default function Home() {
     [receiptMappings],
   );
 
+  const manualUnmatchedReceipts = receiptMappings.filter((row) => !row.invoiceData);
+  const whatsappUnmatchedReceipts =
+    data?.whatsappMessages?.filter(
+      (row) => row.mediaId && row.result && !row.result.invoiceData,
+    ) ?? [];
+
   return (
     <main className="mx-auto min-h-screen w-full max-w-6xl px-6 py-10">
       <section className="rounded-2xl border border-zinc-200 bg-white p-6 shadow-sm">
@@ -356,6 +392,120 @@ export default function Home() {
                       </td>
                     </tr>
                   )}
+                </tbody>
+              </table>
+            </div>
+          </section>
+
+          <section className="mt-6 overflow-hidden rounded-xl border border-amber-200 bg-white">
+            <header className="border-b border-amber-100 bg-amber-50 px-5 py-3">
+              <h3 className="text-base font-semibold text-zinc-900">
+                Unmatched Receipts
+              </h3>
+            </header>
+            <div className="max-h-80 overflow-auto">
+              <table className="w-full text-sm">
+                <thead className="bg-white text-left text-zinc-600">
+                  <tr>
+                    <th className="px-4 py-2">Source</th>
+                    <th className="px-4 py-2">Image / Media</th>
+                    <th className="px-4 py-2">Detected Invoice</th>
+                    <th className="px-4 py-2">Customer</th>
+                    <th className="px-4 py-2">City</th>
+                    <th className="px-4 py-2">Courier</th>
+                    <th className="px-4 py-2">Sender / Status</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {manualUnmatchedReceipts.map((row, index) => (
+                    <tr
+                      key={`manual-${row.fileName}-${index}`}
+                      className="border-t border-zinc-100"
+                    >
+                      <td className="px-4 py-2 text-xs font-medium text-zinc-700">
+                        Upload
+                      </td>
+                      <td className="px-4 py-2">
+                        {row.previewUrl ? (
+                          <button
+                            type="button"
+                            onClick={() =>
+                              setActivePreview({
+                                url: row.previewUrl!,
+                                name: row.fileName,
+                              })
+                            }
+                            className="rounded-md focus:outline-none focus:ring-2 focus:ring-zinc-400"
+                          >
+                            <img
+                              src={row.previewUrl}
+                              alt={row.fileName}
+                              className="h-14 w-14 rounded-md border border-zinc-200 object-cover"
+                            />
+                          </button>
+                        ) : (
+                          <span className="text-xs text-zinc-500">{row.fileName}</span>
+                        )}
+                      </td>
+                      <td className="px-4 py-2">
+                        {row.masterInvoiceNo || row.mappedRow.invoiceNo || "-"}
+                      </td>
+                      <td className="px-4 py-2">{row.mappedRow.customerName || "-"}</td>
+                      <td className="px-4 py-2">{row.mappedRow.city || "-"}</td>
+                      <td className="px-4 py-2">{row.mappedRow.courierName || "-"}</td>
+                      <td className="px-4 py-2 text-xs text-zinc-500">
+                        Current upload session
+                      </td>
+                    </tr>
+                  ))}
+
+                  {whatsappUnmatchedReceipts.map((row) => (
+                    <tr key={`whatsapp-${row.id}`} className="border-t border-zinc-100">
+                      <td className="px-4 py-2 text-xs font-medium text-zinc-700">
+                        WhatsApp
+                      </td>
+                      <td className="px-4 py-2">
+                        <div className="space-y-1">
+                          <p className="text-xs text-zinc-700">
+                            {row.mediaMimeType || "image"}
+                          </p>
+                          <p className="max-w-48 truncate text-xs text-zinc-500">
+                            {row.mediaId}
+                          </p>
+                        </div>
+                      </td>
+                      <td className="px-4 py-2">
+                        {invoiceFromReceiptResult(row.result) || "-"}
+                      </td>
+                      <td className="px-4 py-2">
+                        {row.result?.mappedRow?.customerName || "-"}
+                      </td>
+                      <td className="px-4 py-2">
+                        {row.result?.mappedRow?.city || "-"}
+                      </td>
+                      <td className="px-4 py-2">
+                        {row.result?.mappedRow?.courierName || "-"}
+                      </td>
+                      <td className="px-4 py-2">
+                        <div className="space-y-1">
+                          <p className="text-xs font-medium text-zinc-700">
+                            {row.profileName || row.fromNumber}
+                          </p>
+                          <p className="text-xs text-zinc-500">
+                            {formatDateTime(row.createdAt)} | {row.status}
+                          </p>
+                        </div>
+                      </td>
+                    </tr>
+                  ))}
+
+                  {!manualUnmatchedReceipts.length && !whatsappUnmatchedReceipts.length ? (
+                    <tr>
+                      <td className="px-4 py-4 text-zinc-500" colSpan={7}>
+                        No unmatched receipts yet.
+                      </td>
+                    </tr>
+                  ) : null}
                 </tbody>
               </table>
             </div>
