@@ -50,25 +50,8 @@ function invoiceNumberFor(result: MatchedReceiptResult): string {
   );
 }
 
-async function findCustomerNotificationTargets(
-  result: MatchedReceiptResult,
-): Promise<CustomerNotificationTarget[]> {
-  const codeCandidate = normalizeForMatch(result.mappedRow?.customerCode);
-  const nameCandidates = new Set(
-    [
-      result.invoiceData?.vendorName,
-      result.mappedRow?.customerName,
-      result.mappedRow?.shippingName,
-    ]
-      .map(normalizeForMatch)
-      .filter(Boolean),
-  );
-
-  if (!codeCandidate && !nameCandidates.size) {
-    return [];
-  }
-
-  const rows = await db
+async function enabledCustomerNotificationTargets(): Promise<CustomerNotificationTarget[]> {
+  return db
     .select({
       customerId: customerMaster.id,
       customerCode: customerMaster.customerCode,
@@ -86,13 +69,43 @@ async function findCustomerNotificationTargets(
         eq(customerPhoneNumbers.isWhatsappEnabled, true),
       ),
     );
+}
 
-  return rows.filter((row) => {
+async function findCustomerNotificationTargets(
+  result: MatchedReceiptResult,
+): Promise<CustomerNotificationTarget[]> {
+  const rows = await enabledCustomerNotificationTargets();
+  const codeCandidate = normalizeForMatch(result.mappedRow?.customerCode);
+  const nameCandidates = new Set(
+    [
+      result.invoiceData?.vendorName,
+      result.mappedRow?.customerName,
+      result.mappedRow?.shippingName,
+    ]
+      .map(normalizeForMatch)
+      .filter(Boolean),
+  );
+
+  const matchedTargets = rows.filter((row) => {
     if (codeCandidate && normalizeForMatch(row.customerCode) === codeCandidate) {
       return true;
     }
     return nameCandidates.has(normalizeForMatch(row.customerName));
   });
+
+  if (matchedTargets.length) {
+    return matchedTargets;
+  }
+
+  appLog("customer.notifications", "matched_notify_using_seeded_fallback_numbers", {
+    invoiceNumber: result.invoiceData?.invoiceNumber ?? null,
+    invoiceCustomer: result.invoiceData?.vendorName ?? null,
+    mappedCustomer: result.mappedRow?.customerName ?? null,
+    mappedCustomerCode: result.mappedRow?.customerCode ?? null,
+    targetCount: rows.length,
+  }, "warn");
+
+  return rows;
 }
 
 export async function notifyMatchedCustomerContacts({
