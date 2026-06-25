@@ -12,6 +12,7 @@
     "db:studio": "drizzle-kit studio"
   },
   "dependencies": {
+    "@aws-sdk/client-s3": "^3.1075.0",
     "drizzle-orm": "^0.44.6",
     "next": "16.1.6",
     "postgres": "^3.4.7",

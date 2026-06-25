@@ -107,6 +107,12 @@ The API returns rows with this column order:
 Environment:
 - `OPENAI_API_KEY` is required for OCR extraction.
 - `OPENAI_MODEL` is optional (default: `gpt-4.1-mini`).
+- Receipt images are uploaded to S3 before returning/storing match history.
+  - Default bucket: `ddecor-blinds`
+  - Default region: `ap-south-1`
+  - The app uses the standard AWS SDK credential chain, so an AWS profile, runtime IAM role, or env credentials can provide access.
+  - Optional overrides: `S3_BUCKET_ARN`, `S3_BUCKET_NAME`, `AWS_REGION`.
+  - Env credentials may use the standard `AWS_ACCESS_KEY_ID` name or the supported `AWS_ACCESS_KEY` alias, plus `AWS_SECRET_ACCESS_KEY`.
 
 ## Matching Logic (POC)
 An invoice and transaction match when:

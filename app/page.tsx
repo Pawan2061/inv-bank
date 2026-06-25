@@ -20,6 +20,7 @@ type DashboardPayload = {
 type ReceiptResult = {
   fileName?: string;
   masterInvoiceNo?: string;
+  imageStore?: ImageStore;
   invoiceData?: {
     id: number;
     invoiceNumber: string;
@@ -35,6 +36,7 @@ type ReceiptResult = {
     city?: string;
     courierName?: string;
   };
+  tokenUsage?: TokenUsage;
 };
 
 type WhatsAppHistoryRow = {
@@ -44,6 +46,8 @@ type WhatsAppHistoryRow = {
   profileName: string | null;
   mediaId: string | null;
   mediaMimeType: string | null;
+  mediaUrl: string | null;
+  mediaS3Key: string | null;
   status: string;
   responseText: string | null;
   errorMessage: string | null;
@@ -51,9 +55,23 @@ type WhatsAppHistoryRow = {
   createdAt: string;
 };
 
+type ImageStore = {
+  bucket: string;
+  region: string;
+  key: string;
+  url: string;
+};
+
+type TokenUsage = {
+  inputTokens: number;
+  outputTokens: number;
+  totalTokens: number;
+};
+
 type ReceiptMappingResult = {
   fileName: string;
   previewUrl?: string;
+  imageStore?: ImageStore;
   matchedFromMaster: boolean;
   masterInvoiceNo: string;
   transactionExists: boolean;
@@ -66,11 +84,7 @@ type ReceiptMappingResult = {
     amountCents: number;
     status: string;
   } | null;
-  tokenUsage?: {
-    inputTokens: number;
-    outputTokens: number;
-    totalTokens: number;
-  };
+  tokenUsage?: TokenUsage;
   mappedRow: {
     invoiceNo: string;
     customerName: string;
@@ -102,6 +116,81 @@ function invoiceFromReceiptResult(result?: ReceiptResult | null): string {
     result?.mappedRow?.invoiceNo ||
     ""
   );
+}
+
+function TokenUsageDetails({ tokenUsage }: { tokenUsage?: TokenUsage | null }) {
+  if (!tokenUsage) {
+    return <span className="text-xs text-zinc-500">-</span>;
+  }
+
+  return (
+    <div className="space-y-1">
+      <p className="text-xs text-zinc-500">In: {tokenUsage.inputTokens}</p>
+      <p className="text-xs text-zinc-500">Out: {tokenUsage.outputTokens}</p>
+      <p className="text-xs font-medium text-zinc-700">
+        Total: {tokenUsage.totalTokens}
+      </p>
+    </div>
+  );
+}
+
+function ReceiptMediaPreview({
+  fileName,
+  imageStore,
+  mediaId,
+  mediaMimeType,
+  previewUrl,
+  size = "sm",
+  onPreview,
+}: {
+  fileName?: string | null;
+  imageStore?: ImageStore | null;
+  mediaId?: string | null;
+  mediaMimeType?: string | null;
+  previewUrl?: string | null;
+  size?: "sm" | "md";
+  onPreview: (preview: { url: string; name: string }) => void;
+}) {
+  const imageUrl = imageStore?.url ?? previewUrl;
+  const imageName = fileName || mediaId || "Receipt";
+  const imageSize = size === "md" ? "h-16 w-16" : "h-14 w-14";
+
+  if (imageUrl) {
+    return (
+      <button
+        type="button"
+        onClick={() => onPreview({ url: imageUrl, name: imageName })}
+        className="rounded-md focus:outline-none focus:ring-2 focus:ring-zinc-400"
+      >
+        <img
+          src={imageUrl}
+          alt={imageName}
+          className={`${imageSize} rounded-md border border-zinc-200 object-cover`}
+        />
+      </button>
+    );
+  }
+
+  if (mediaId) {
+    return (
+      <div className="space-y-1">
+        <p className="text-xs text-zinc-700">{mediaMimeType || "image"}</p>
+        <p className="max-w-48 truncate text-xs text-zinc-500">{mediaId}</p>
+      </div>
+    );
+  }
+
+  return <span className="text-xs text-zinc-500">{fileName || "-"}</span>;
+}
+
+function whatsappMediaPreviewUrl(row: WhatsAppHistoryRow): string | null {
+  if (row.mediaUrl) {
+    return row.mediaUrl;
+  }
+  if (!row.mediaId) {
+    return null;
+  }
+  return `/api/whatsapp/media?messageId=${encodeURIComponent(row.messageId)}`;
 }
 
 async function parseApiResponse(
@@ -242,7 +331,7 @@ export default function Home() {
         });
         return (payload.rows ?? []).map((row, index) => ({
           ...row,
-          previewUrl: previewUrls[index],
+          previewUrl: row.imageStore?.url ?? previewUrls[index],
         }));
       });
       setReceiptFiles([]);
@@ -413,6 +502,7 @@ export default function Home() {
                     <th className="px-4 py-2">Customer</th>
                     <th className="px-4 py-2">City</th>
                     <th className="px-4 py-2">Courier</th>
+                    <th className="px-4 py-2">Token Usage</th>
                     <th className="px-4 py-2">Sender / Status</th>
                   </tr>
                 </thead>
@@ -426,26 +516,12 @@ export default function Home() {
                         Upload
                       </td>
                       <td className="px-4 py-2">
-                        {row.previewUrl ? (
-                          <button
-                            type="button"
-                            onClick={() =>
-                              setActivePreview({
-                                url: row.previewUrl!,
-                                name: row.fileName,
-                              })
-                            }
-                            className="rounded-md focus:outline-none focus:ring-2 focus:ring-zinc-400"
-                          >
-                            <img
-                              src={row.previewUrl}
-                              alt={row.fileName}
-                              className="h-14 w-14 rounded-md border border-zinc-200 object-cover"
-                            />
-                          </button>
-                        ) : (
-                          <span className="text-xs text-zinc-500">{row.fileName}</span>
-                        )}
+                        <ReceiptMediaPreview
+                          fileName={row.fileName}
+                          imageStore={row.imageStore}
+                          previewUrl={row.previewUrl}
+                          onPreview={setActivePreview}
+                        />
                       </td>
                       <td className="px-4 py-2">
                         {row.masterInvoiceNo || row.mappedRow.invoiceNo || "-"}
@@ -453,6 +529,9 @@ export default function Home() {
                       <td className="px-4 py-2">{row.mappedRow.customerName || "-"}</td>
                       <td className="px-4 py-2">{row.mappedRow.city || "-"}</td>
                       <td className="px-4 py-2">{row.mappedRow.courierName || "-"}</td>
+                      <td className="px-4 py-2">
+                        <TokenUsageDetails tokenUsage={row.tokenUsage} />
+                      </td>
                       <td className="px-4 py-2 text-xs text-zinc-500">
                         Current upload session
                       </td>
@@ -465,14 +544,14 @@ export default function Home() {
                         WhatsApp
                       </td>
                       <td className="px-4 py-2">
-                        <div className="space-y-1">
-                          <p className="text-xs text-zinc-700">
-                            {row.mediaMimeType || "image"}
-                          </p>
-                          <p className="max-w-48 truncate text-xs text-zinc-500">
-                            {row.mediaId}
-                          </p>
-                        </div>
+                        <ReceiptMediaPreview
+                          fileName={row.result?.fileName}
+                          imageStore={row.result?.imageStore}
+                          previewUrl={whatsappMediaPreviewUrl(row)}
+                          mediaId={row.mediaId}
+                          mediaMimeType={row.mediaMimeType}
+                          onPreview={setActivePreview}
+                        />
                       </td>
                       <td className="px-4 py-2">
                         {invoiceFromReceiptResult(row.result) || "-"}
@@ -485,6 +564,9 @@ export default function Home() {
                       </td>
                       <td className="px-4 py-2">
                         {row.result?.mappedRow?.courierName || "-"}
+                      </td>
+                      <td className="px-4 py-2">
+                        <TokenUsageDetails tokenUsage={row.result?.tokenUsage} />
                       </td>
                       <td className="px-4 py-2">
                         <div className="space-y-1">
@@ -501,7 +583,7 @@ export default function Home() {
 
                   {!manualUnmatchedReceipts.length && !whatsappUnmatchedReceipts.length ? (
                     <tr>
-                      <td className="px-4 py-4 text-zinc-500" colSpan={7}>
+                      <td className="px-4 py-4 text-zinc-500" colSpan={8}>
                         No unmatched receipts yet.
                       </td>
                     </tr>
@@ -525,6 +607,7 @@ export default function Home() {
                     <th className="px-4 py-2">Sender</th>
                     <th className="px-4 py-2">Media</th>
                     <th className="px-4 py-2">Status</th>
+                    <th className="px-4 py-2">Token Usage</th>
                     <th className="px-4 py-2">Reply</th>
                     <th className="px-4 py-2">Error</th>
                   </tr>
@@ -547,23 +630,22 @@ export default function Home() {
                           </div>
                         </td>
                         <td className="px-4 py-2">
-                          {row.mediaId ? (
-                            <div className="space-y-1">
-                              <p className="text-xs text-zinc-700">
-                                {row.mediaMimeType || "image"}
-                              </p>
-                              <p className="max-w-48 truncate text-xs text-zinc-500">
-                                {row.mediaId}
-                              </p>
-                            </div>
-                          ) : (
-                            "-"
-                          )}
+                          <ReceiptMediaPreview
+                            fileName={row.result?.fileName}
+                            imageStore={row.result?.imageStore}
+                            previewUrl={whatsappMediaPreviewUrl(row)}
+                            mediaId={row.mediaId}
+                            mediaMimeType={row.mediaMimeType}
+                            onPreview={setActivePreview}
+                          />
                         </td>
                         <td className="px-4 py-2">
                           <span className="rounded bg-zinc-100 px-2 py-1 text-xs font-medium text-zinc-700">
                             {row.status}
                           </span>
+                        </td>
+                        <td className="px-4 py-2">
+                          <TokenUsageDetails tokenUsage={row.result?.tokenUsage} />
                         </td>
                         <td className="max-w-sm whitespace-pre-wrap px-4 py-2 text-xs text-zinc-700">
                           {row.responseText || "-"}
@@ -575,7 +657,7 @@ export default function Home() {
                     ))
                   ) : (
                     <tr>
-                      <td className="px-4 py-4 text-zinc-500" colSpan={6}>
+                      <td className="px-4 py-4 text-zinc-500" colSpan={7}>
                         No WhatsApp messages processed yet.
                       </td>
                     </tr>
@@ -616,26 +698,13 @@ export default function Home() {
                         className="border-t border-zinc-100"
                       >
                         <td className="px-4 py-2">
-                          {row.previewUrl ? (
-                            <button
-                              type="button"
-                              onClick={() =>
-                                setActivePreview({
-                                  url: row.previewUrl!,
-                                  name: row.fileName,
-                                })
-                              }
-                              className="rounded-md focus:outline-none focus:ring-2 focus:ring-zinc-400"
-                            >
-                              <img
-                                src={row.previewUrl}
-                                alt={row.fileName}
-                                className="h-16 w-16 rounded-md border border-zinc-200 object-cover"
-                              />
-                            </button>
-                          ) : (
-                            "-"
-                          )}
+                          <ReceiptMediaPreview
+                            fileName={row.fileName}
+                            imageStore={row.imageStore}
+                            previewUrl={row.previewUrl}
+                            size="md"
+                            onPreview={setActivePreview}
+                          />
                         </td>
                         <td className="px-4 py-2">{row.fileName}</td>
                         <td className="px-4 py-2">{row.mappedRow.invoiceNo || "-"}</td>
@@ -675,21 +744,7 @@ export default function Home() {
                           )}
                         </td>
                         <td className="px-4 py-2">
-                          {row.tokenUsage ? (
-                            <div className="space-y-1">
-                              <p className="text-xs text-zinc-500">
-                                In: {row.tokenUsage.inputTokens}
-                              </p>
-                              <p className="text-xs text-zinc-500">
-                                Out: {row.tokenUsage.outputTokens}
-                              </p>
-                              <p className="text-xs font-medium text-zinc-700">
-                                Total: {row.tokenUsage.totalTokens}
-                              </p>
-                            </div>
-                          ) : (
-                            "-"
-                          )}
+                          <TokenUsageDetails tokenUsage={row.tokenUsage} />
                         </td>
                       </tr>
                     ))

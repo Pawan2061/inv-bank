@@ -57,8 +57,24 @@ type WhatsAppWebhookPayload = {
       value?: {
         contacts?: WhatsAppContact[];
         messages?: WhatsAppMessage[];
+        statuses?: WhatsAppStatus[];
       };
     }>;
+  }>;
+};
+
+type WhatsAppStatus = {
+  id?: string;
+  status?: string;
+  timestamp?: string;
+  recipient_id?: string;
+  errors?: Array<{
+    code?: number;
+    title?: string;
+    message?: string;
+    error_data?: {
+      details?: string;
+    };
   }>;
 };
 
@@ -72,7 +88,18 @@ type UploadedMedia = {
   id?: string;
 };
 
-const DEFAULT_ADMIN_WHATSAPP_NUMBER = "919289037928";
+type SentMessageResponse = {
+  contacts?: Array<{
+    input?: string;
+    wa_id?: string;
+  }>;
+  messages?: Array<{
+    id?: string;
+    message_status?: string;
+  }>;
+};
+
+const DEFAULT_ADMIN_WHATSAPP_NUMBER = "9289037928";
 
 function graphBaseUrl(): string {
   return `https://graph.facebook.com/${process.env.WA_VERSION ?? "v21.0"}`;
@@ -95,7 +122,11 @@ function phoneNumberId(): string {
 }
 
 function adminWhatsAppNumber(): string {
-  return (process.env.ADMIN_WHATSAPP_NUMBER ?? DEFAULT_ADMIN_WHATSAPP_NUMBER).replace(/\D/g, "");
+  const digits = (process.env.ADMIN_WHATSAPP_NUMBER ?? DEFAULT_ADMIN_WHATSAPP_NUMBER).replace(/\D/g, "");
+  if (digits.length === 10) {
+    return `91${digits}`;
+  }
+  return digits;
 }
 
 function verifyWebhookSignature(rawBody: string, signature: string | null): boolean {
@@ -187,9 +218,13 @@ async function sendTextMessage(to: string, body: string): Promise<void> {
     );
   }
 
+  const payload = (await response.json()) as SentMessageResponse;
   appLog("whatsapp.webhook", "send_text_completed", {
     to,
     status: response.status,
+    whatsappMessageId: payload.messages?.[0]?.id,
+    messageStatus: payload.messages?.[0]?.message_status,
+    recipientWaId: payload.contacts?.[0]?.wa_id,
   });
 }
 
@@ -276,9 +311,13 @@ async function sendImageMessage(to: string, file: File, caption: string): Promis
     );
   }
 
+  const payload = (await response.json()) as SentMessageResponse;
   appLog("whatsapp.webhook", "send_image_completed", {
     to,
     status: response.status,
+    whatsappMessageId: payload.messages?.[0]?.id,
+    messageStatus: payload.messages?.[0]?.message_status,
+    recipientWaId: payload.contacts?.[0]?.wa_id,
   });
 }
 
@@ -513,6 +552,7 @@ async function updateHistoryRow(
     hasResponseText: Boolean(values.responseText),
     hasErrorMessage: Boolean(values.errorMessage),
     hasResult: Boolean(values.result),
+    hasMediaUrl: Boolean(values.mediaUrl),
   });
 
   await db
@@ -572,6 +612,8 @@ async function handleImageMessage(
         status: "forwarded_to_admin",
         responseText,
         result,
+        mediaUrl: result.imageStore.url,
+        mediaS3Key: result.imageStore.key,
       });
       appLog("whatsapp.webhook", "image_message_forwarded_to_admin", {
         messageId: message.id,
@@ -592,6 +634,8 @@ async function handleImageMessage(
       status: "sending_reply",
       responseText,
       result,
+      mediaUrl: result.imageStore.url,
+      mediaS3Key: result.imageStore.key,
     });
     await sendTextMessage(message.from, responseText);
     await updateHistoryRow(message.id, { status: "replied" });
@@ -692,6 +736,18 @@ function extractWebhookMessages(payload: WhatsAppWebhookPayload) {
   return extracted;
 }
 
+function extractWebhookStatuses(payload: WhatsAppWebhookPayload): WhatsAppStatus[] {
+  const statuses: WhatsAppStatus[] = [];
+
+  for (const entry of payload.entry ?? []) {
+    for (const change of entry.changes ?? []) {
+      statuses.push(...(change.value?.statuses ?? []));
+    }
+  }
+
+  return statuses;
+}
+
 export async function GET(request: Request) {
   const url = new URL(request.url);
   const mode = url.searchParams.get("hub.mode");
@@ -750,11 +806,28 @@ export async function POST(request: Request) {
   }
 
   const messages = extractWebhookMessages(payload);
+  const statuses = extractWebhookStatuses(payload);
 
   appLog("whatsapp.webhook", "post_messages_extracted", {
     messageCount: messages.length,
+    statusCount: statuses.length,
     entryCount: payload.entry?.length ?? 0,
   });
+
+  for (const status of statuses) {
+    appLog("whatsapp.webhook", "delivery_status_received", {
+      whatsappMessageId: status.id,
+      status: status.status,
+      recipientId: status.recipient_id,
+      timestamp: status.timestamp,
+      errors: status.errors?.map((error) => ({
+        code: error.code,
+        title: error.title,
+        message: error.message,
+        details: error.error_data?.details,
+      })),
+    }, status.status === "failed" ? "error" : "info");
+  }
 
   for (const { message, profileName } of messages) {
     if (message.type === "image") {

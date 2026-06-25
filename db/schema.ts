@@ -46,6 +46,8 @@ export const whatsappMessages = pgTable("whatsapp_messages", {
   mediaId: text("media_id"),
   mediaMimeType: text("media_mime_type"),
   mediaSha256: text("media_sha256"),
+  mediaUrl: text("media_url"),
+  mediaS3Key: text("media_s3_key"),
   status: text("status").notNull().default("received"),
   responseText: text("response_text"),
   errorMessage: text("error_message"),

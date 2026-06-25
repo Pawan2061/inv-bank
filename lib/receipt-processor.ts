@@ -9,6 +9,7 @@ import {
   type DataMasterRow,
   type ReceiptExtraction,
 } from "@/lib/receipt-mapping";
+import { storeReceiptImage, type StoredImage } from "@/lib/s3-image-store";
 
 const OPENAI_MODEL = process.env.OPENAI_MODEL ?? "gpt-4.1-mini";
 
@@ -49,6 +50,7 @@ export type ReceiptProcessingResult = {
     outputTokens: number;
     totalTokens: number;
   };
+  imageStore: StoredImage;
   mappedRow: ReturnType<typeof mapReceiptToDataRow>;
 };
 
@@ -600,7 +602,11 @@ export async function processReceiptImages(
         fileName: file.name,
       });
 
-      const { extraction, tokenUsage } = await extractFromImage(file);
+      const [imageStore, ocrResult] = await Promise.all([
+        storeReceiptImage(file),
+        extractFromImage(file),
+      ]);
+      const { extraction, tokenUsage } = ocrResult;
       const mappedFromImage = mapReceiptToDataRow(extraction);
       const numericCandidates = collectNumericCandidates(extraction);
       const masterLookup = resolveMasterInvoice(
@@ -659,6 +665,7 @@ export async function processReceiptImages(
             }
           : null,
         tokenUsage,
+        imageStore,
         mappedRow: dataRow,
       };
 
@@ -669,6 +676,7 @@ export async function processReceiptImages(
         masterInvoiceNo: result.masterInvoiceNo,
         matchedInvoiceNumber: result.invoiceData?.invoiceNumber ?? null,
         transactionHitCount: transactionHits.length,
+        imageStoreKey: imageStore.key,
       });
 
       return result;
