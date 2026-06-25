@@ -3,6 +3,7 @@ import { eq } from "drizzle-orm";
 import { NextResponse } from "next/server";
 import { db } from "@/db/client";
 import { whatsappMessages } from "@/db/schema";
+import { notifyMatchedCustomerContacts } from "@/lib/customer-notifications";
 import { appLog } from "@/lib/logger";
 import { HttpError, processReceiptImages } from "@/lib/receipt-processor";
 
@@ -638,6 +639,10 @@ async function handleImageMessage(
       mediaS3Key: result.imageStore.key,
     });
     await sendTextMessage(message.from, responseText);
+    await notifyMatchedCustomerContacts({
+      result,
+      sourceMessageId: message.id,
+    });
     await updateHistoryRow(message.id, { status: "replied" });
     appLog("whatsapp.webhook", "image_message_completed", {
       messageId: message.id,

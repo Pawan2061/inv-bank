@@ -1,4 +1,15 @@
-import { date, integer, jsonb, pgTable, serial, text, timestamp } from "drizzle-orm/pg-core";
+import {
+  boolean,
+  date,
+  index,
+  integer,
+  jsonb,
+  pgTable,
+  serial,
+  text,
+  timestamp,
+  uniqueIndex,
+} from "drizzle-orm/pg-core";
 
 export const invoices = pgTable("invoices", {
   id: serial("id").primaryKey(),
@@ -37,6 +48,47 @@ export const reconciliationMatches = pgTable("reconciliation_matches", {
   reason: text("reason").notNull(),
   createdAt: timestamp("created_at", { withTimezone: true }).defaultNow().notNull(),
 });
+
+export const customerMaster = pgTable(
+  "customer_master",
+  {
+    id: serial("id").primaryKey(),
+    customerCode: text("customer_code").notNull(),
+    customerName: text("customer_name").notNull(),
+    cityName: text("city_name"),
+    billingState: text("billing_state"),
+    billingPincode: text("billing_pincode"),
+    source: text("source").notNull().default("manual"),
+    isActive: boolean("is_active").notNull().default(true),
+    createdAt: timestamp("created_at", { withTimezone: true }).defaultNow().notNull(),
+    updatedAt: timestamp("updated_at", { withTimezone: true }).defaultNow().notNull(),
+  },
+  (table) => ({
+    customerCodeUq: uniqueIndex("customer_master_customer_code_uq").on(table.customerCode),
+    customerNameIdx: index("customer_master_customer_name_idx").on(table.customerName),
+    cityNameIdx: index("customer_master_city_name_idx").on(table.cityName),
+  }),
+);
+
+export const customerPhoneNumbers = pgTable(
+  "customer_phone_numbers",
+  {
+    id: serial("id").primaryKey(),
+    customerId: integer("customer_id")
+      .notNull()
+      .references(() => customerMaster.id, { onDelete: "cascade" }),
+    phoneNumber: text("phone_number").notNull(),
+    label: text("label"),
+    isPrimary: boolean("is_primary").notNull().default(false),
+    isWhatsappEnabled: boolean("is_whatsapp_enabled").notNull().default(true),
+    createdAt: timestamp("created_at", { withTimezone: true }).defaultNow().notNull(),
+    updatedAt: timestamp("updated_at", { withTimezone: true }).defaultNow().notNull(),
+  },
+  (table) => ({
+    phoneNumberUq: uniqueIndex("customer_phone_numbers_phone_number_uq").on(table.phoneNumber),
+    customerIdIdx: index("customer_phone_numbers_customer_id_idx").on(table.customerId),
+  }),
+);
 
 export const whatsappMessages = pgTable("whatsapp_messages", {
   id: serial("id").primaryKey(),
