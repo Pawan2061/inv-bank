@@ -638,7 +638,6 @@ async function handleImageMessage(
       mediaUrl: result.imageStore.url,
       mediaS3Key: result.imageStore.key,
     });
-    await sendTextMessage(message.from, responseText);
     await notifyMatchedCustomerContacts({
       result,
       sourceMessageId: message.id,

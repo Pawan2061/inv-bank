@@ -50,6 +50,15 @@ function invoiceNumberFor(result: MatchedReceiptResult): string {
   );
 }
 
+function customerNameFor(result: MatchedReceiptResult): string {
+  return (
+    result.invoiceData?.vendorName ||
+    result.mappedRow?.customerName ||
+    result.mappedRow?.shippingName ||
+    "-"
+  );
+}
+
 async function enabledCustomerNotificationTargets(): Promise<CustomerNotificationTarget[]> {
   return db
     .select({
@@ -147,7 +156,7 @@ export async function notifyMatchedCustomerContacts({
         templateName: templateConfig.name,
         languageCode: templateConfig.languageCode,
         bodyParameters: [
-          target.customerName,
+          customerNameFor(result),
           invoiceNumberFor(result),
           result.invoiceData?.issueDate ?? "-",
           formatCents(result.invoiceData?.amountCents ?? 0),
