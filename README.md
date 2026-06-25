@@ -113,6 +113,10 @@ Environment:
   - The app uses the standard AWS SDK credential chain, so an AWS profile, runtime IAM role, or env credentials can provide access.
   - Optional overrides: `S3_BUCKET_ARN`, `S3_BUCKET_NAME`, `AWS_REGION`.
   - Env credentials may use the standard `AWS_ACCESS_KEY_ID` name or the supported `AWS_ACCESS_KEY` alias, plus `AWS_SECRET_ACCESS_KEY`.
+- Customer notifications use approved WhatsApp templates.
+  - `WA_MATCH_TEMPLATE_NAME` enables matched-invoice customer notifications.
+  - `WA_MATCH_TEMPLATE_LANGUAGE` defaults to `en_US`.
+  - Body variables are sent as: customer name, invoice number, invoice date, amount.
 
 ## Matching Logic (POC)
 An invoice and transaction match when:
