@@ -2,6 +2,7 @@ import { eq } from "drizzle-orm";
 import { NextResponse } from "next/server";
 import { db } from "@/db/client";
 import { whatsappMessages } from "@/db/schema";
+import { requireUser } from "@/lib/auth";
 import { storeReceiptImage } from "@/lib/s3-image-store";
 
 export const runtime = "nodejs";
@@ -74,6 +75,11 @@ async function downloadMedia(mediaId: string, fallbackMimeType?: string) {
 }
 
 export async function GET(request: Request) {
+  const auth = await requireUser();
+  if (auth instanceof NextResponse) {
+    return auth;
+  }
+
   const messageId = new URL(request.url).searchParams.get("messageId");
   if (!messageId) {
     return NextResponse.json({ error: "Missing messageId." }, { status: 400 });

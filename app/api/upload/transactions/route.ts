@@ -1,10 +1,16 @@
 import { NextResponse } from "next/server";
 import { db } from "@/db/client";
 import { bankTransactions, reconciliationMatches } from "@/db/schema";
+import { requireUser } from "@/lib/auth";
 import { assertDate, getHeaderMap, parseAmountToCents } from "@/lib/csv";
 import { parseTabularUpload } from "@/lib/spreadsheet";
 
 export async function POST(request: Request) {
+  const auth = await requireUser();
+  if (auth instanceof NextResponse) {
+    return auth;
+  }
+
   try {
     const formData = await request.formData();
     const file = formData.get("file");

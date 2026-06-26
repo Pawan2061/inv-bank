@@ -171,7 +171,7 @@ function collectNumericCandidates(extraction: ReceiptExtraction): string[] {
       return;
     }
     const digitsOnly = raw.replace(/\D/g, "");
-    if (digitsOnly.length >= 6) {
+    if (digitsOnly.length >= 4) {
       values.add(digitsOnly);
     }
   };
@@ -180,7 +180,7 @@ function collectNumericCandidates(extraction: ReceiptExtraction): string[] {
   (extraction.invoiceCandidates ?? []).forEach(pushValue);
 
   const rawText = extraction.rawText ?? "";
-  const fromText = rawText.match(/\d{6,14}/g) ?? [];
+  const fromText = rawText.match(/\d{4,14}/g) ?? [];
   fromText.forEach((value) => values.add(value));
 
   return [...values];
@@ -450,10 +450,12 @@ async function extractFromImage(file: File): Promise<{
     "template (sre_cargo | psr_travels | unknown), company_name, invoice_no, invoice_candidates, booking_date, receipt_no, received_from, consignor_name, consignee_name, to_deliver, city, qty, description, parcel_details, customer_code, customer_name, shipping_name, courier_name, header_remark, remarks, amount, raw_text",
     "Rules:",
     "1) booking_date format must be YYYY-MM-DD if possible, else keep original text.",
-    "2) invoice_candidates should be an array of up to 3 likely invoice numbers when uncertain.",
-    "3) Fill unknown scalar values with empty string and unknown arrays with [].",
-    "4) raw_text must contain OCR text seen on image (best effort).",
-    "5) Do not include markdown or extra text.",
+    "2) Check printed text, stamps, circled areas, and handwritten notes for invoice references.",
+    "3) If only the last 4-6 digits of an invoice number are handwritten or circled, put that suffix in invoice_no when it is the clearest reference and include it in invoice_candidates.",
+    "4) invoice_candidates should be an array of up to 5 likely invoice numbers or numeric suffixes when uncertain. Include plausible alternatives from both printed and handwritten text.",
+    "5) Fill unknown scalar values with empty string and unknown arrays with [].",
+    "6) raw_text must contain OCR text seen on image, including handwritten/circled digits when visible (best effort).",
+    "7) Do not include markdown or extra text.",
   ].join("\n");
 
   const response = await fetch("https://api.openai.com/v1/responses", {

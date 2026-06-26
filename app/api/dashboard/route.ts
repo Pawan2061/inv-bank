@@ -7,10 +7,16 @@ import {
   reconciliationMatches,
   whatsappMessages,
 } from "@/db/schema";
+import { requireUser } from "@/lib/auth";
 
 const DEMO_INVOICE_NUMBERS = ["INV-1001", "INV-1002", "INV-1003", "INV-1004"] as const;
 
 export async function GET() {
+  const auth = await requireUser();
+  if (auth instanceof NextResponse) {
+    return auth;
+  }
+
   const [
     invoiceRows,
     transactionRows,

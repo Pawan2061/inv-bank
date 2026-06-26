@@ -1,9 +1,15 @@
 import { NextResponse } from "next/server";
+import { requireUser } from "@/lib/auth";
 import { fetchReceiptImage } from "@/lib/s3-image-store";
 
 export const runtime = "nodejs";
 
 export async function GET(request: Request) {
+  const auth = await requireUser();
+  if (auth instanceof NextResponse) {
+    return auth;
+  }
+
   const key = new URL(request.url).searchParams.get("key");
   if (!key) {
     return NextResponse.json({ error: "Missing receipt image key." }, { status: 400 });

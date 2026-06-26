@@ -1,8 +1,14 @@
 import { NextResponse } from "next/server";
 import { DATA_XLSX_HEADERS } from "@/lib/receipt-mapping";
 import { HttpError, processReceiptImages } from "@/lib/receipt-processor";
+import { requireUser } from "@/lib/auth";
 
 export async function POST(request: Request) {
+  const auth = await requireUser();
+  if (auth instanceof NextResponse) {
+    return auth;
+  }
+
   try {
     const formData = await request.formData();
     const files = formData
