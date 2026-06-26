@@ -1,6 +1,6 @@
 # Invoice + Bank Reconciliation POC
 
-This is a Next.js proof-of-concept app that:
+This is  Next.js proof-of-concept app that:
 - stores invoices and bank statement rows in PostgreSQL,
 - uses Drizzle ORM for schema + queries,
 - runs a deterministic matching workflow,
