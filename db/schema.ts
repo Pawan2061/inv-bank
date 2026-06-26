@@ -70,6 +70,25 @@ export const customerMaster = pgTable(
   }),
 );
 
+export const users = pgTable(
+  "users",
+  {
+    id: serial("id").primaryKey(),
+    username: text("username").notNull(),
+    email: text("email").notNull(),
+    passwordHash: text("password_hash").notNull(),
+    customerId: integer("customer_id").references(() => customerMaster.id, {
+      onDelete: "set null",
+    }),
+    createdAt: timestamp("created_at", { withTimezone: true }).defaultNow().notNull(),
+    updatedAt: timestamp("updated_at", { withTimezone: true }).defaultNow().notNull(),
+  },
+  (table) => ({
+    usernameUq: uniqueIndex("users_username_uq").on(table.username),
+    emailUq: uniqueIndex("users_email_uq").on(table.email),
+  }),
+);
+
 export const customerPhoneNumbers = pgTable(
   "customer_phone_numbers",
   {
