@@ -11,6 +11,10 @@ type SentMessageResponse = {
   }>;
 };
 
+type UploadedMediaResponse = {
+  id?: string;
+};
+
 function graphBaseUrl(): string {
   return `https://graph.facebook.com/${process.env.WA_VERSION ?? "v21.0"}`;
 }
@@ -50,18 +54,46 @@ export async function sendWhatsAppTemplateMessage({
   templateName,
   languageCode,
   bodyParameters,
+  headerImageMediaId,
 }: {
   to: string;
   templateName: string;
   languageCode: string;
   bodyParameters: string[];
+  headerImageMediaId?: string;
 }): Promise<void> {
   appLog("whatsapp.template", "send_started", {
     to,
     templateName,
     languageCode,
     bodyParameterCount: bodyParameters.length,
+    hasHeaderImage: Boolean(headerImageMediaId),
   });
+
+  const components = [
+    ...(headerImageMediaId
+      ? [
+          {
+            type: "header",
+            parameters: [
+              {
+                type: "image",
+                image: {
+                  id: headerImageMediaId,
+                },
+              },
+            ],
+          },
+        ]
+      : []),
+    {
+      type: "body",
+      parameters: bodyParameters.map((text) => ({
+        type: "text",
+        text: text || "-",
+      })),
+    },
+  ];
 
   const response = await fetch(`${graphBaseUrl()}/${phoneNumberId()}/messages`, {
     method: "POST",
@@ -79,15 +111,7 @@ export async function sendWhatsAppTemplateMessage({
         language: {
           code: languageCode,
         },
-        components: [
-          {
-            type: "body",
-            parameters: bodyParameters.map((text) => ({
-              type: "text",
-              text: text || "-",
-            })),
-          },
-        ],
+        components,
       },
     }),
   });
@@ -114,4 +138,46 @@ export async function sendWhatsAppTemplateMessage({
     messageStatus: payload.messages?.[0]?.message_status,
     recipientWaId: payload.contacts?.[0]?.wa_id,
   });
+}
+
+export async function uploadWhatsAppMedia(file: File): Promise<string> {
+  appLog("whatsapp.template", "upload_media_started", {
+    fileName: file.name,
+    mimeType: file.type,
+    size: file.size,
+  });
+
+  const formData = new FormData();
+  formData.append("messaging_product", "whatsapp");
+  formData.append("file", file);
+
+  const response = await fetch(`${graphBaseUrl()}/${phoneNumberId()}/media`, {
+    method: "POST",
+    headers: {
+      Authorization: `Bearer ${whatsappToken()}`,
+    },
+    body: formData,
+  });
+
+  if (!response.ok) {
+    const details = await response.text();
+    appLog("whatsapp.template", "upload_media_failed", {
+      status: response.status,
+      details: details.slice(0, 500),
+    }, "error");
+    throw new Error(
+      `WhatsApp media upload failed (${response.status}): ${details.slice(0, 500)}`,
+    );
+  }
+
+  const payload = (await response.json()) as UploadedMediaResponse;
+  if (!payload.id) {
+    throw new Error("WhatsApp media upload did not return a media id.");
+  }
+
+  appLog("whatsapp.template", "upload_media_completed", {
+    mediaId: payload.id,
+  });
+
+  return payload.id;
 }

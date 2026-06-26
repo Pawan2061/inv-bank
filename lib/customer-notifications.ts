@@ -2,9 +2,11 @@ import { and, eq } from "drizzle-orm";
 import { db } from "@/db/client";
 import { customerMaster, customerPhoneNumbers } from "@/db/schema";
 import { appLog } from "@/lib/logger";
+import { fetchReceiptImage } from "@/lib/s3-image-store";
 import {
   matchTemplateConfig,
   sendWhatsAppTemplateMessage,
+  uploadWhatsAppMedia,
 } from "@/lib/whatsapp-template";
 
 type MatchedReceiptResult = {
@@ -20,6 +22,9 @@ type MatchedReceiptResult = {
     customerCode?: string;
     customerName?: string;
     shippingName?: string;
+  };
+  imageStore?: {
+    key: string;
   };
 };
 
@@ -57,6 +62,36 @@ function customerNameFor(result: MatchedReceiptResult): string {
     result.mappedRow?.shippingName ||
     "-"
   );
+}
+
+function extensionForMimeType(mimeType: string): string {
+  return mimeType.split("/")[1]?.split(";")[0]?.replace(/[^a-z0-9]/gi, "") || "jpg";
+}
+
+async function uploadReceiptHeaderImage(
+  result: MatchedReceiptResult,
+): Promise<string | undefined> {
+  if (!result.imageStore?.key) {
+    appLog("customer.notifications", "matched_notify_missing_header_image", {
+      invoiceNumber: result.invoiceData?.invoiceNumber ?? null,
+    }, "warn");
+    return undefined;
+  }
+
+  const image = await fetchReceiptImage(result.imageStore.key);
+  if (!image.body) {
+    throw new Error("Receipt image body is empty.");
+  }
+
+  const mimeType = image.contentType ?? "image/jpeg";
+  const buffer = await new Response(image.body).arrayBuffer();
+  const file = new File(
+    [buffer],
+    `receipt-header.${extensionForMimeType(mimeType)}`,
+    { type: mimeType },
+  );
+
+  return uploadWhatsAppMedia(file);
 }
 
 async function enabledCustomerNotificationTargets(): Promise<CustomerNotificationTarget[]> {
@@ -149,12 +184,15 @@ export async function notifyMatchedCustomerContacts({
     return;
   }
 
+  const headerImageMediaId = await uploadReceiptHeaderImage(result);
+
   await Promise.allSettled(
     targets.map(async (target) => {
       await sendWhatsAppTemplateMessage({
         to: target.phoneNumber,
         templateName: templateConfig.name,
         languageCode: templateConfig.languageCode,
+        headerImageMediaId,
         bodyParameters: [
           customerNameFor(result),
           invoiceNumberFor(result),
