@@ -5,14 +5,15 @@ services:
       target: runner
     image: invoice-bank-app:local
     restart: unless-stopped
+    network_mode: host
     environment:
       NODE_ENV: production
-      PORT: 3000
+      PORT: ${APP_PORT:-3010}
       HOSTNAME: 0.0.0.0
       AUTH_SECRET: ${AUTH_SECRET:-change-this-to-a-long-random-string}
       FRONTEND_URL: ${FRONTEND_URL:-http://localhost:3010}
       AI_PROVIDER: ollama
-      OLLAMA_BASE_URL: http://host.docker.internal:11434
+      OLLAMA_BASE_URL: ${OLLAMA_BASE_URL:-http://127.0.0.1:11434}
       OLLAMA_MODEL: ${OLLAMA_MODEL:-gemma4:e4b}
       AI_REQUEST_TIMEOUT_MS: ${AI_REQUEST_TIMEOUT_MS:-600000}
       DATABASE_URL: ${DATABASE_URL}
@@ -33,12 +34,6 @@ services:
       WA_MATCH_TEMPLATE_NAME: ${WA_MATCH_TEMPLATE_NAME:-}
       WA_MATCH_TEMPLATE_LANGUAGE: ${WA_MATCH_TEMPLATE_LANGUAGE:-en_US}
       SECRET_TOKEN: ${SECRET_TOKEN:-}
-    ports:
-      - "${APP_PORT:-3010}:3000"
-    extra_hosts:
-      - "host.docker.internal:host-gateway"
-    networks:
-      - invoice-bank
 
   migrate:
     build:
@@ -54,6 +49,8 @@ services:
 
   postgres:
     image: postgres:16-alpine
+    profiles:
+      - local-db
     restart: unless-stopped
     environment:
       POSTGRES_DB: invoice_bank
