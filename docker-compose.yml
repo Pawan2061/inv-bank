@@ -1,0 +1,94 @@
+services:
+  app:
+    build:
+      context: .
+      target: runner
+    image: invoice-bank-app:local
+    restart: unless-stopped
+    environment:
+      NODE_ENV: production
+      PORT: 3000
+      HOSTNAME: 0.0.0.0
+      AUTH_SECRET: ${AUTH_SECRET:-change-this-to-a-long-random-string}
+      FRONTEND_URL: ${FRONTEND_URL:-http://localhost:3010}
+      AI_PROVIDER: ollama
+      OLLAMA_BASE_URL: http://ollama:11434
+      OLLAMA_MODEL: ${OLLAMA_MODEL:-gemma4:e4b}
+      AI_REQUEST_TIMEOUT_MS: ${AI_REQUEST_TIMEOUT_MS:-600000}
+      DATABASE_URL: ${DATABASE_URL}
+      S3_BUCKET_ARN: ${S3_BUCKET_ARN:-arn:aws:s3:::ddecor-blinds}
+      S3_BUCKET_NAME: ${S3_BUCKET_NAME:-ddecor-blinds}
+      AWS_REGION: ${AWS_REGION:-ap-south-1}
+      AWS_ACCESS_KEY_ID: ${AWS_ACCESS_KEY_ID:-}
+      AWS_ACCESS_KEY: ${AWS_ACCESS_KEY:-}
+      AWS_SECRET_ACCESS_KEY: ${AWS_SECRET_ACCESS_KEY:-}
+      AWS_SESSION_TOKEN: ${AWS_SESSION_TOKEN:-}
+      WA_VERSION: ${WA_VERSION:-v21.0}
+      WA_BE_ACC_ID: ${WA_BE_ACC_ID:-}
+      WA_APP_ID: ${WA_APP_ID:-}
+      WA_PHONE_NO_ID: ${WA_PHONE_NO_ID:-}
+      WA_TOKEN: ${WA_TOKEN:-}
+      WA_HOOKS_VERIFY_TOKEN: ${WA_HOOKS_VERIFY_TOKEN:-}
+      WA_APP_SECRET: ${WA_APP_SECRET:-}
+      WA_MATCH_TEMPLATE_NAME: ${WA_MATCH_TEMPLATE_NAME:-}
+      WA_MATCH_TEMPLATE_LANGUAGE: ${WA_MATCH_TEMPLATE_LANGUAGE:-en_US}
+      SECRET_TOKEN: ${SECRET_TOKEN:-}
+    ports:
+      - "${APP_PORT:-3010}:3000"
+    depends_on:
+      postgres:
+        condition: service_healthy
+      ollama:
+        condition: service_started
+    networks:
+      - invoice-bank
+
+  migrate:
+    build:
+      context: .
+      target: builder
+    profiles:
+      - tools
+    environment:
+      DATABASE_URL: ${DATABASE_URL}
+    command: sh -c "pnpm db:migrate"
+    depends_on:
+      postgres:
+        condition: service_healthy
+    networks:
+      - invoice-bank
+
+  postgres:
+    image: postgres:16-alpine
+    restart: unless-stopped
+    environment:
+      POSTGRES_DB: invoice_bank
+      POSTGRES_USER: postgres
+      POSTGRES_PASSWORD: postgres
+    ports:
+      - "${POSTGRES_PORT:-5433}:5432"
+    volumes:
+      - postgres-data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U postgres -d invoice_bank"]
+      interval: 5s
+      timeout: 5s
+      retries: 20
+    networks:
+      - invoice-bank
+
+  ollama:
+    image: ollama/ollama:latest
+    restart: unless-stopped
+    volumes:
+      - ollama-data:/root/.ollama
+    networks:
+      - invoice-bank
+
+volumes:
+  postgres-data:
+  ollama-data:
+
+networks:
+  invoice-bank:
+    name: invoice-bank

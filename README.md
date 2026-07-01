@@ -40,6 +40,32 @@ pnpm dev
 
 Open `http://localhost:3000`.
 
+## Docker Local Test
+
+The Docker setup keeps app ports away from existing services:
+- app: `http://localhost:3010`
+- Postgres: host port `5433`
+- Ollama: private Compose network only, not exposed publicly
+
+```bash
+cp .env.docker.example .env.docker
+# Set DATABASE_URL in .env.docker. To use Compose Postgres:
+# DATABASE_URL=postgresql://postgres:postgres@postgres:5432/invoice_bank
+docker compose --env-file .env.docker up -d --build postgres ollama
+docker compose exec ollama ollama pull gemma4:e4b
+docker compose --env-file .env.docker run --rm migrate
+docker compose --env-file .env.docker up -d app
+```
+
+Open `http://localhost:3010`.
+
+Useful checks:
+```bash
+docker compose ps
+docker compose logs -f app
+docker compose exec ollama ollama list
+```
+
 ## API Endpoints
 - `POST /api/reconcile`
   - runs invoice-to-bank matching and updates row status to `matched`.
@@ -54,7 +80,7 @@ Open `http://localhost:3000`.
   - replaces existing bank transaction rows in DB.
 - `POST /api/upload/receipts`
   - accepts receipt images (`files` form-data, multiple allowed),
-  - runs OCR/field extraction (OpenAI vision, with fallback invoice candidates for unclear images),
+  - runs OCR/field extraction through the configured AI provider,
   - maps extracted values into `data.xlsx` column shape,
   - checks whether a corresponding bank transaction exists.
 
@@ -105,8 +131,17 @@ The API returns rows with this column order:
 - `Remarks`
 
 Environment:
-- `OPENAI_API_KEY` is required for OCR extraction.
-- `OPENAI_MODEL` is optional (default: `gpt-4.1-mini`).
+- Receipt OCR defaults to local Ollama:
+  - `AI_PROVIDER=ollama`
+  - `OLLAMA_BASE_URL=http://127.0.0.1:11434`
+  - `OLLAMA_MODEL=gemma4:e4b`
+  - `AI_REQUEST_TIMEOUT_MS=600000`
+- To test locally, run `ollama serve`, confirm `ollama list` includes `gemma4:e4b`, then restart the app.
+- On a VM, run Ollama on the same host when possible and keep `OLLAMA_BASE_URL=http://127.0.0.1:11434`. Do not expose Ollama publicly without firewall/auth protection.
+- Optional OpenAI fallback:
+  - set `AI_PROVIDER=openai`
+  - `OPENAI_API_KEY` is required
+  - `OPENAI_MODEL` is optional (default: `gpt-4.1-mini`)
 - Receipt images are uploaded to S3 before returning/storing match history.
   - Default bucket: `ddecor-blinds`
   - Default region: `ap-south-1`

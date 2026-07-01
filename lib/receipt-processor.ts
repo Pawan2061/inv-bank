@@ -11,7 +11,23 @@ import {
 } from "@/lib/receipt-mapping";
 import { storeReceiptImage, type StoredImage } from "@/lib/s3-image-store";
 
+const AI_PROVIDER = process.env.AI_PROVIDER ?? "ollama";
 const OPENAI_MODEL = process.env.OPENAI_MODEL ?? "gpt-4.1-mini";
+const OLLAMA_BASE_URL = (
+  process.env.OLLAMA_BASE_URL ?? "http://127.0.0.1:11434"
+).replace(/\/+$/, "");
+const OLLAMA_MODEL = process.env.OLLAMA_MODEL ?? "gemma4:e4b";
+const parsedAiRequestTimeout = Number(process.env.AI_REQUEST_TIMEOUT_MS);
+const AI_REQUEST_TIMEOUT_MS =
+  Number.isFinite(parsedAiRequestTimeout) && parsedAiRequestTimeout > 0
+    ? parsedAiRequestTimeout
+    : 600_000;
+
+type TokenUsage = {
+  inputTokens: number;
+  outputTokens: number;
+  totalTokens: number;
+};
 
 export class HttpError extends Error {
   status: number;
@@ -45,11 +61,7 @@ export type ReceiptProcessingResult = {
     amountCents: number;
     status: string;
   } | null;
-  tokenUsage: {
-    inputTokens: number;
-    outputTokens: number;
-    totalTokens: number;
-  };
+  tokenUsage: TokenUsage;
   imageStore: StoredImage;
   mappedRow: ReturnType<typeof mapReceiptToDataRow>;
 };
@@ -120,6 +132,23 @@ function toExtraction(value: Record<string, unknown>): ReceiptExtraction {
       : [],
     rawText: asString(value.raw_text),
   };
+}
+
+function receiptExtractionPrompt(): string {
+  return [
+    "Extract fields from this cargo/transport receipt image and return STRICT JSON only.",
+    "Image may be blurry, noisy, or skewed. Infer carefully and include alternatives.",
+    "Use these keys exactly:",
+    "template (sre_cargo | psr_travels | unknown), company_name, invoice_no, invoice_candidates, booking_date, receipt_no, received_from, consignor_name, consignee_name, to_deliver, city, qty, description, parcel_details, customer_code, customer_name, shipping_name, courier_name, header_remark, remarks, amount, raw_text",
+    "Rules:",
+    "1) booking_date format must be YYYY-MM-DD if possible, else keep original text.",
+    "2) Check printed text, stamps, circled areas, and handwritten notes for invoice references.",
+    "3) If only the last 4-6 digits of an invoice number are handwritten or circled, put that suffix in invoice_no when it is the clearest reference and include it in invoice_candidates.",
+    "4) invoice_candidates should be an array of up to 5 likely invoice numbers or numeric suffixes when uncertain. Include plausible alternatives from both printed and handwritten text.",
+    "5) Fill unknown scalar values with empty string and unknown arrays with [].",
+    "6) raw_text must contain OCR text seen on image, including handwritten/circled digits when visible (best effort).",
+    "7) Do not include markdown or extra text.",
+  ].join("\n");
 }
 
 function editDistanceAtMostOne(a: string, b: string): boolean {
@@ -416,16 +445,31 @@ function invoiceRowToMasterRow(
 
 async function extractFromImage(file: File): Promise<{
   extraction: ReceiptExtraction;
-  tokenUsage: {
-    inputTokens: number;
-    outputTokens: number;
-    totalTokens: number;
-  };
+  tokenUsage: TokenUsage;
+}> {
+  const provider = AI_PROVIDER.toLowerCase();
+  if (provider === "ollama") {
+    return extractFromImageWithOllama(file);
+  }
+  if (provider === "openai") {
+    return extractFromImageWithOpenAI(file);
+  }
+
+  throw new HttpError(
+    500,
+    `Unsupported AI_PROVIDER "${AI_PROVIDER}". Use "ollama" or "openai".`,
+  );
+}
+
+async function extractFromImageWithOpenAI(file: File): Promise<{
+  extraction: ReceiptExtraction;
+  tokenUsage: TokenUsage;
 }> {
   appLog("receipt.processor", "ocr_started", {
     fileName: file.name,
     mimeType: file.type,
     size: file.size,
+    provider: "openai",
     model: OPENAI_MODEL,
   });
 
@@ -443,43 +487,40 @@ async function extractFromImage(file: File): Promise<{
   const base64 = buffer.toString("base64");
   const imageUrl = `data:${mimeType};base64,${base64}`;
 
-  const prompt = [
-    "Extract fields from this cargo/transport receipt image and return STRICT JSON only.",
-    "Image may be blurry, noisy, or skewed. Infer carefully and include alternatives.",
-    "Use these keys exactly:",
-    "template (sre_cargo | psr_travels | unknown), company_name, invoice_no, invoice_candidates, booking_date, receipt_no, received_from, consignor_name, consignee_name, to_deliver, city, qty, description, parcel_details, customer_code, customer_name, shipping_name, courier_name, header_remark, remarks, amount, raw_text",
-    "Rules:",
-    "1) booking_date format must be YYYY-MM-DD if possible, else keep original text.",
-    "2) Check printed text, stamps, circled areas, and handwritten notes for invoice references.",
-    "3) If only the last 4-6 digits of an invoice number are handwritten or circled, put that suffix in invoice_no when it is the clearest reference and include it in invoice_candidates.",
-    "4) invoice_candidates should be an array of up to 5 likely invoice numbers or numeric suffixes when uncertain. Include plausible alternatives from both printed and handwritten text.",
-    "5) Fill unknown scalar values with empty string and unknown arrays with [].",
-    "6) raw_text must contain OCR text seen on image, including handwritten/circled digits when visible (best effort).",
-    "7) Do not include markdown or extra text.",
-  ].join("\n");
-
-  const response = await fetch("https://api.openai.com/v1/responses", {
-    method: "POST",
-    headers: {
-      "Content-Type": "application/json",
-      Authorization: `Bearer ${apiKey}`,
-    },
-    body: JSON.stringify({
-      model: OPENAI_MODEL,
-      input: [
-        {
-          role: "user",
-          content: [
-            { type: "input_text", text: prompt },
-            {
-              type: "input_image",
-              image_url: imageUrl,
-            },
-          ],
-        },
-      ],
-    }),
-  });
+  let response: Response;
+  try {
+    response = await fetch("https://api.openai.com/v1/responses", {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+        Authorization: `Bearer ${apiKey}`,
+      },
+      signal: AbortSignal.timeout(AI_REQUEST_TIMEOUT_MS),
+      body: JSON.stringify({
+        model: OPENAI_MODEL,
+        input: [
+          {
+            role: "user",
+            content: [
+              { type: "input_text", text: receiptExtractionPrompt() },
+              {
+                type: "input_image",
+                image_url: imageUrl,
+              },
+            ],
+          },
+        ],
+      }),
+    });
+  } catch (error) {
+    const errorMessage = error instanceof Error ? error.message : "Unknown error";
+    appLog("receipt.processor", "ocr_request_failed", {
+      fileName: file.name,
+      provider: "openai",
+      errorMessage,
+    }, "error");
+    throw new HttpError(502, `OCR provider request failed: ${errorMessage}`);
+  }
 
   if (!response.ok) {
     const details = await response.text();
@@ -538,6 +579,112 @@ async function extractFromImage(file: File): Promise<{
 
   appLog("receipt.processor", "ocr_completed", {
     fileName: file.name,
+    provider: "openai",
+    invoiceNo: result.extraction.invoiceNo ?? null,
+    candidateCount: result.extraction.invoiceCandidates?.length ?? 0,
+    totalTokens: result.tokenUsage.totalTokens,
+  });
+
+  return result;
+}
+
+async function extractFromImageWithOllama(file: File): Promise<{
+  extraction: ReceiptExtraction;
+  tokenUsage: TokenUsage;
+}> {
+  appLog("receipt.processor", "ocr_started", {
+    fileName: file.name,
+    mimeType: file.type,
+    size: file.size,
+    provider: "ollama",
+    baseUrl: OLLAMA_BASE_URL,
+    model: OLLAMA_MODEL,
+  });
+
+  const buffer = Buffer.from(await file.arrayBuffer());
+  const base64 = buffer.toString("base64");
+
+  let response: Response;
+  try {
+    response = await fetch(`${OLLAMA_BASE_URL}/api/generate`, {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+      },
+      signal: AbortSignal.timeout(AI_REQUEST_TIMEOUT_MS),
+      body: JSON.stringify({
+        model: OLLAMA_MODEL,
+        prompt: receiptExtractionPrompt(),
+        images: [base64],
+        stream: false,
+        format: "json",
+        options: {
+          temperature: 0,
+        },
+      }),
+    });
+  } catch (error) {
+    const errorMessage = error instanceof Error ? error.message : "Unknown error";
+    appLog("receipt.processor", "ocr_request_failed", {
+      fileName: file.name,
+      provider: "ollama",
+      baseUrl: OLLAMA_BASE_URL,
+      errorMessage,
+    }, "error");
+    throw new HttpError(
+      502,
+      `Ollama OCR request failed at ${OLLAMA_BASE_URL}. Check that Ollama is running and ${OLLAMA_MODEL} is installed. Details: ${errorMessage}`,
+    );
+  }
+
+  if (!response.ok) {
+    const details = await response.text();
+    appLog("receipt.processor", "ocr_failed", {
+      fileName: file.name,
+      provider: "ollama",
+      status: response.status,
+      details: details.slice(0, 500),
+    }, "error");
+    throw new HttpError(
+      response.status,
+      `OCR extraction failed (${response.status}): ${details.slice(0, 500)}`,
+    );
+  }
+
+  const payload = (await response.json()) as {
+    response?: string;
+    prompt_eval_count?: number;
+    eval_count?: number;
+  };
+
+  const outputText = payload.response ?? "";
+  const parsed = tryParseJsonObject(outputText);
+  if (!parsed) {
+    appLog("receipt.processor", "ocr_parse_failed", {
+      fileName: file.name,
+      provider: "ollama",
+      outputPreview: outputText.slice(0, 500),
+    }, "error");
+    throw new HttpError(
+      502,
+      "OCR response parsing failed. Try a clearer image or a tighter crop around invoice details.",
+    );
+  }
+
+  const inputTokens = Number(payload.prompt_eval_count ?? 0);
+  const outputTokens = Number(payload.eval_count ?? 0);
+  const result = {
+    extraction: toExtraction(parsed),
+    tokenUsage: {
+      inputTokens,
+      outputTokens,
+      totalTokens: inputTokens + outputTokens,
+    },
+  };
+
+  appLog("receipt.processor", "ocr_completed", {
+    fileName: file.name,
+    provider: "ollama",
     invoiceNo: result.extraction.invoiceNo ?? null,
     candidateCount: result.extraction.invoiceCandidates?.length ?? 0,
     totalTokens: result.tokenUsage.totalTokens,

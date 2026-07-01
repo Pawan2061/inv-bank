@@ -1,0 +1,17 @@
+.git
+.next
+.vercel
+.pnpm-store
+node_modules
+coverage
+build
+out
+
+.env
+.env.*
+!.env.example
+!.env.docker.example
+
+*.log
+*.tsbuildinfo
+.DS_Store
