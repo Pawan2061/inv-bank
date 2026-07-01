@@ -12,7 +12,7 @@ services:
       AUTH_SECRET: ${AUTH_SECRET:-change-this-to-a-long-random-string}
       FRONTEND_URL: ${FRONTEND_URL:-http://localhost:3010}
       AI_PROVIDER: ollama
-      OLLAMA_BASE_URL: http://ollama:11434
+      OLLAMA_BASE_URL: http://host.docker.internal:11434
       OLLAMA_MODEL: ${OLLAMA_MODEL:-gemma4:e4b}
       AI_REQUEST_TIMEOUT_MS: ${AI_REQUEST_TIMEOUT_MS:-600000}
       DATABASE_URL: ${DATABASE_URL}
@@ -35,9 +35,8 @@ services:
       SECRET_TOKEN: ${SECRET_TOKEN:-}
     ports:
       - "${APP_PORT:-3010}:3000"
-    depends_on:
-      ollama:
-        condition: service_started
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
     networks:
       - invoice-bank
 
@@ -72,19 +71,8 @@ services:
     networks:
       - invoice-bank
 
-  ollama:
-    image: ollama/ollama:latest
-    restart: unless-stopped
-    cpus: ${OLLAMA_CPUS:-2}
-    mem_limit: ${OLLAMA_MEM_LIMIT:-16g}
-    volumes:
-      - ollama-data:/root/.ollama
-    networks:
-      - invoice-bank
-
 volumes:
   postgres-data:
-  ollama-data:
 
 networks:
   invoice-bank:
