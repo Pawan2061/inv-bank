@@ -45,16 +45,19 @@ Open `http://localhost:3000`.
 The Docker setup keeps app ports away from existing services:
 - app: `http://localhost:3010`
 - Postgres: host port `5433`
-- Ollama: private Compose network only, not exposed publicly
+- Ollama: uses the host Ollama service at `http://host.docker.internal:11434`
 
 ```bash
 cp .env.docker.example .env.docker
 # Set DATABASE_URL in .env.docker. To use Compose Postgres:
 # DATABASE_URL=postgresql://postgres:postgres@postgres:5432/invoice_bank
-docker compose --env-file .env.docker up -d --build postgres ollama
-docker compose exec ollama ollama pull gemma4:e4b
-docker compose --env-file .env.docker run --rm migrate
+ollama list
 docker compose --env-file .env.docker up -d app
+```
+
+Run migrations only when needed:
+```bash
+docker compose --env-file .env.docker run --rm migrate
 ```
 
 Open `http://localhost:3010`.
@@ -63,7 +66,6 @@ Useful checks:
 ```bash
 docker compose ps
 docker compose logs -f app
-docker compose exec ollama ollama list
 ```
 
 ## API Endpoints
