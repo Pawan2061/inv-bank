@@ -45,13 +45,14 @@ Open `http://localhost:3000`.
 The Docker setup keeps app ports away from existing services:
 - app: `http://localhost:3010`
 - Postgres: host port `5433`
-- Ollama: uses the host Ollama service at `http://host.docker.internal:11434`
+- Ollama: private Compose service at `http://ollama:11434`, with no public host port
 
 ```bash
 cp .env.docker.example .env.docker
 # Set DATABASE_URL in .env.docker. To use Compose Postgres:
 # DATABASE_URL=postgresql://postgres:postgres@postgres:5432/invoice_bank
-ollama list
+docker compose --env-file .env.docker up -d ollama
+docker compose --env-file .env.docker exec ollama ollama pull gemma4:e4b
 docker compose --env-file .env.docker up -d app
 ```
 
@@ -66,6 +67,7 @@ Useful checks:
 ```bash
 docker compose ps
 docker compose logs -f app
+docker compose --env-file .env.docker exec ollama ollama list
 ```
 
 ## API Endpoints
@@ -133,13 +135,14 @@ The API returns rows with this column order:
 - `Remarks`
 
 Environment:
-- Receipt OCR defaults to local Ollama:
+- Receipt OCR defaults to Ollama:
   - `AI_PROVIDER=ollama`
-  - `OLLAMA_BASE_URL=http://127.0.0.1:11434`
+  - non-Docker local dev: `OLLAMA_BASE_URL=http://127.0.0.1:11434`
+  - Docker/Compose: `OLLAMA_BASE_URL=http://ollama:11434`
   - `OLLAMA_MODEL=gemma4:e4b`
   - `AI_REQUEST_TIMEOUT_MS=600000`
 - To test locally, run `ollama serve`, confirm `ollama list` includes `gemma4:e4b`, then restart the app.
-- On a VM, run Ollama on the same host when possible and keep `OLLAMA_BASE_URL=http://127.0.0.1:11434`. Do not expose Ollama publicly without firewall/auth protection.
+- On a VM with Docker, use the Compose `ollama` service and do not publish port `11434`.
 - Optional OpenAI fallback:
   - set `AI_PROVIDER=openai`
   - `OPENAI_API_KEY` is required
