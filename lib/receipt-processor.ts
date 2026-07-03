@@ -142,12 +142,14 @@ function receiptExtractionPrompt(): string {
     "template (sre_cargo | psr_travels | unknown), company_name, invoice_no, invoice_candidates, booking_date, receipt_no, received_from, consignor_name, consignee_name, to_deliver, city, qty, description, parcel_details, customer_code, customer_name, shipping_name, courier_name, header_remark, remarks, amount, raw_text",
     "Rules:",
     "1) booking_date format must be YYYY-MM-DD if possible, else keep original text.",
-    "2) Check printed text, stamps, circled areas, and handwritten notes for invoice references.",
-    "3) If only the last 4-6 digits of an invoice number are handwritten or circled, put that suffix in invoice_no when it is the clearest reference and include it in invoice_candidates.",
-    "4) invoice_candidates should be an array of up to 5 likely invoice numbers or numeric suffixes when uncertain. Include plausible alternatives from both printed and handwritten text.",
-    "5) Fill unknown scalar values with empty string and unknown arrays with [].",
-    "6) raw_text must contain OCR text seen on image, including handwritten/circled digits when visible (best effort).",
-    "7) Do not include markdown or extra text.",
+    "2) L.R. No, LR No, lorry receipt number, receipt number, billty number, and printed transport slip serials are NOT invoice numbers. Put them in receipt_no when visible, not invoice_no.",
+    "3) The invoice reference is usually handwritten, circled, underlined, or written in the description / P. MARK / remarks area. Prefer that handwritten value over any printed L.R. No.",
+    "4) If only the last 4-6 handwritten digits of an invoice number are visible, put that suffix in invoice_no and include it in invoice_candidates.",
+    "5) Check printed text, stamps, circled areas, and handwritten notes for invoice references, but do not use the top-right L.R. No as invoice_no unless it is explicitly labeled invoice.",
+    "6) invoice_candidates should be an array of up to 5 likely invoice numbers or numeric suffixes when uncertain. Put handwritten/circled/underlined candidates first. Exclude L.R. No unless it is explicitly labeled invoice.",
+    "7) Fill unknown scalar values with empty string and unknown arrays with [].",
+    "8) raw_text must contain OCR text seen on image, including handwritten/circled digits when visible (best effort).",
+    "9) Do not include markdown or extra text.",
   ].join("\n");
 }
 
@@ -192,25 +194,55 @@ function editDistanceAtMostOne(a: string, b: string): boolean {
   return edits <= 1;
 }
 
+function sameNormalizedValue(a?: string, b?: string): boolean {
+  const normalizedA = normalizeInvoiceNo(a ?? "");
+  const normalizedB = normalizeInvoiceNo(b ?? "");
+  return Boolean(normalizedA && normalizedB && normalizedA === normalizedB);
+}
+
+function hasLikelyReceiptNumberAsInvoice(extraction: ReceiptExtraction): boolean {
+  return sameNormalizedValue(extraction.invoiceNo, extraction.receiptNo);
+}
+
 function collectNumericCandidates(extraction: ReceiptExtraction): string[] {
   const values = new Set<string>();
+  const likelyReceiptNo = hasLikelyReceiptNumberAsInvoice(extraction)
+    ? extraction.invoiceNo
+    : undefined;
 
-  const pushValue = (raw?: string) => {
+  const pushValue = (raw?: string, options?: { allowReceiptNo?: boolean }) => {
     if (!raw) {
       return;
     }
     const digitsOnly = raw.replace(/\D/g, "");
     if (digitsOnly.length >= 4) {
+      if (!options?.allowReceiptNo && sameNormalizedValue(digitsOnly, likelyReceiptNo)) {
+        return;
+      }
       values.add(digitsOnly);
     }
   };
 
   pushValue(extraction.invoiceNo);
-  (extraction.invoiceCandidates ?? []).forEach(pushValue);
+  (extraction.invoiceCandidates ?? []).forEach((value) => pushValue(value));
+
+  [
+    extraction.description,
+    extraction.parcelDetails,
+    extraction.headerRemark,
+    extraction.remarks,
+  ].forEach((fieldText) => {
+    const matches = fieldText?.match(/\d{4,14}/g) ?? [];
+    matches.forEach((value) => pushValue(value));
+  });
 
   const rawText = extraction.rawText ?? "";
   const fromText = rawText.match(/\d{4,14}/g) ?? [];
-  fromText.forEach((value) => values.add(value));
+  fromText.forEach((value) => pushValue(value));
+
+  if (values.size === 0) {
+    pushValue(likelyReceiptNo, { allowReceiptNo: true });
+  }
 
   return [...values];
 }
@@ -757,21 +789,24 @@ export async function processReceiptImages(
       ]);
       const { extraction, tokenUsage } = ocrResult;
       const mappedFromImage = mapReceiptToDataRow(extraction);
+      const mappedForMatching = hasLikelyReceiptNumberAsInvoice(extraction)
+        ? { ...mappedFromImage, invoiceNo: "" }
+        : mappedFromImage;
       const numericCandidates = collectNumericCandidates(extraction);
       const masterLookup = resolveMasterInvoice(
         masterEntries,
-        mappedFromImage.invoiceNo,
+        mappedForMatching.invoiceNo,
         extraction.invoiceCandidates,
         numericCandidates,
         {
-          customerName: mappedFromImage.customerName,
-          city: mappedFromImage.city,
-          courierName: mappedFromImage.courierName,
-          bookingDateSerial: mappedFromImage.invoiceDate,
+          customerName: mappedForMatching.customerName,
+          city: mappedForMatching.city,
+          courierName: mappedForMatching.courierName,
+          bookingDateSerial: mappedForMatching.invoiceDate,
         },
       );
       const masterRow = masterLookup?.row;
-      const dataRow = mergeWithMasterRow(mappedFromImage, masterRow);
+      const dataRow = mergeWithMasterRow(mappedForMatching, masterRow);
       const resolvedInvoiceNo = normalizeInvoiceNo(
         masterLookup?.invoiceNo || dataRow.invoiceNo,
       );
@@ -820,7 +855,7 @@ export async function processReceiptImages(
 
       appLog("receipt.processor", "file_processing_completed", {
         fileName: file.name,
-        extractedInvoiceNo: mappedFromImage.invoiceNo,
+        extractedInvoiceNo: mappedForMatching.invoiceNo,
         resolvedInvoiceNo,
         masterInvoiceNo: result.masterInvoiceNo,
         matchedInvoiceNumber: result.invoiceData?.invoiceNumber ?? null,
