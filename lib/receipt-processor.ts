@@ -147,6 +147,7 @@ function receiptExtractionPrompt(): string {
     "4) If only the last 4-6 handwritten digits of an invoice number are visible, put that suffix in invoice_no and include it in invoice_candidates.",
     "5) Check printed text, stamps, circled areas, and handwritten notes for invoice references, but do not use the top-right L.R. No as invoice_no unless it is explicitly labeled invoice.",
     "6) invoice_candidates should be an array of up to 5 likely invoice numbers or numeric suffixes when uncertain. Put handwritten/circled/underlined candidates first. Exclude L.R. No unless it is explicitly labeled invoice.",
+    "Example: on New R.R. Transport receipts, numbers like the top-right L.R. No. 181336 are receipt_no, while handwritten values in the description/P. MARK area such as VJA267025521, 025521, or 25521 are invoice references.",
     "7) Fill unknown scalar values with empty string and unknown arrays with [].",
     "8) raw_text must contain OCR text seen on image, including handwritten/circled digits when visible (best effort).",
     "9) Do not include markdown or extra text.",
@@ -807,6 +808,9 @@ export async function processReceiptImages(
       );
       const masterRow = masterLookup?.row;
       const dataRow = mergeWithMasterRow(mappedForMatching, masterRow);
+      if (!dataRow.invoiceNo && numericCandidates.length > 0) {
+        dataRow.invoiceNo = numericCandidates[0];
+      }
       const resolvedInvoiceNo = normalizeInvoiceNo(
         masterLookup?.invoiceNo || dataRow.invoiceNo,
       );
