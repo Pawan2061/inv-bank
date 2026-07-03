@@ -1,6 +1,7 @@
 import { db } from "@/db/client";
 import { bankTransactions, invoices } from "@/db/schema";
 import { appLog } from "@/lib/logger";
+import { getActiveAiProvider } from "@/lib/ai-settings";
 import {
   isoDateToExcelSerial,
   mapReceiptToDataRow,
@@ -11,7 +12,6 @@ import {
 } from "@/lib/receipt-mapping";
 import { storeReceiptImage, type StoredImage } from "@/lib/s3-image-store";
 
-const AI_PROVIDER = process.env.AI_PROVIDER ?? "ollama";
 const OPENAI_MODEL = process.env.OPENAI_MODEL ?? "gpt-4.1-mini";
 const OLLAMA_BASE_URL = (
   process.env.OLLAMA_BASE_URL ?? "http://127.0.0.1:11434"
@@ -447,7 +447,7 @@ async function extractFromImage(file: File): Promise<{
   extraction: ReceiptExtraction;
   tokenUsage: TokenUsage;
 }> {
-  const provider = AI_PROVIDER.toLowerCase();
+  const provider = await getActiveAiProvider();
   if (provider === "ollama") {
     return extractFromImageWithOllama(file);
   }
@@ -457,7 +457,7 @@ async function extractFromImage(file: File): Promise<{
 
   throw new HttpError(
     500,
-    `Unsupported AI_PROVIDER "${AI_PROVIDER}". Use "ollama" or "openai".`,
+    `Unsupported AI provider "${provider}". Use "ollama" or "openai".`,
   );
 }
 

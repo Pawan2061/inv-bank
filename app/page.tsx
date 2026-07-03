@@ -17,6 +17,21 @@ type DashboardPayload = {
   whatsappMessages: WhatsAppHistoryRow[];
 };
 
+type AiProvider = "ollama" | "openai";
+
+type AiSettings = {
+  provider: AiProvider;
+  defaultProvider: AiProvider;
+  openai: {
+    configured: boolean;
+    model: string;
+  };
+  ollama: {
+    baseUrl: string;
+    model: string;
+  };
+};
+
 type AuthUser = {
   id: number;
   username: string;
@@ -114,9 +129,9 @@ type ReceiptMappingResult = {
   };
 };
 
-type Action = "uploadInvoices" | "uploadReceipts" | "savePhone";
+type Action = "uploadInvoices" | "uploadReceipts" | "savePhone" | "saveSettings";
 type AuthMode = "login" | "signup";
-type ActiveTab = "verification" | "customers";
+type ActiveTab = "verification" | "customers" | "settings";
 
 function formatCents(cents: number): string {
   return new Intl.NumberFormat("en-US", {
@@ -335,6 +350,7 @@ export default function Home() {
   const [authError, setAuthError] = useState("");
   const [authLoading, setAuthLoading] = useState(false);
   const [data, setData] = useState<DashboardPayload | null>(null);
+  const [aiSettings, setAiSettings] = useState<AiSettings | null>(null);
   const [loading, setLoading] = useState(false);
   const [actionLoading, setActionLoading] = useState<Action | null>(null);
   const [message, setMessage] = useState("");
@@ -387,9 +403,19 @@ export default function Home() {
     }
   }, []);
 
+  const loadAiSettings = useCallback(async () => {
+    const response = await fetch("/api/settings/ai");
+    if (!response.ok) {
+      const payload = await parseApiResponse(response);
+      throw new Error(payload.error ?? "Failed to fetch AI settings.");
+    }
+    const payload = (await response.json()) as AiSettings;
+    setAiSettings(payload);
+  }, []);
+
   const loadWorkspace = useCallback(async () => {
-    await Promise.all([loadDashboard(), loadPhones()]);
-  }, [loadDashboard, loadPhones]);
+    await Promise.all([loadDashboard(), loadPhones(), loadAiSettings()]);
+  }, [loadAiSettings, loadDashboard, loadPhones]);
 
   async function handleAuthSubmit(event: React.FormEvent<HTMLFormElement>) {
     event.preventDefault();
@@ -488,6 +514,38 @@ export default function Home() {
     });
     if (response.ok) {
       await loadPhones();
+    }
+  }
+
+  async function saveAiProvider(provider: AiProvider) {
+    setActionLoading("saveSettings");
+    setMessage("");
+
+    try {
+      const response = await fetch("/api/settings/ai", {
+        method: "PATCH",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ provider }),
+      });
+      const payload = (await response.json()) as AiSettings & {
+        message?: string;
+        error?: string;
+      };
+
+      if (!response.ok) {
+        throw new Error(payload.error ?? "Failed to save AI settings.");
+      }
+
+      setAiSettings(payload);
+      setMessageType("success");
+      setMessage(payload.message ?? "AI settings saved.");
+    } catch (error) {
+      setMessageType("error");
+      setMessage(
+        error instanceof Error ? error.message : "Unknown settings save error.",
+      );
+    } finally {
+      setActionLoading(null);
     }
   }
 
@@ -674,6 +732,7 @@ export default function Home() {
           {[
             { id: "verification", label: "Verification" },
             { id: "customers", label: "Customers" },
+            { id: "settings", label: "Settings" },
           ].map((tab) => (
             <button
               key={tab.id}
@@ -908,6 +967,91 @@ export default function Home() {
           </table>
         </div>
       </section>
+      ) : null}
+
+      {activeTab === "settings" ? (
+        <section className="mt-6 rounded-xl border border-zinc-200 bg-white p-5">
+          <div className="flex flex-col gap-1 sm:flex-row sm:items-end sm:justify-between">
+            <div>
+              <h2 className="text-base font-semibold text-zinc-900">
+                AI Provider
+              </h2>
+              <p className="text-sm text-zinc-600">
+                Choose which OCR provider processes receipt images.
+              </p>
+            </div>
+            {aiSettings ? (
+              <span className="rounded bg-zinc-100 px-2 py-1 text-xs font-medium uppercase tracking-wide text-zinc-700">
+                Active: {aiSettings.provider}
+              </span>
+            ) : null}
+          </div>
+
+          <div className="mt-5 grid gap-4 md:grid-cols-2">
+            {[
+              {
+                id: "ollama" as const,
+                title: "Gemma via Ollama",
+                description: aiSettings
+                  ? `${aiSettings.ollama.model} at ${aiSettings.ollama.baseUrl}`
+                  : "Local OCR model",
+              },
+              {
+                id: "openai" as const,
+                title: "OpenAI",
+                description: aiSettings
+                  ? `${aiSettings.openai.model} ${
+                      aiSettings.openai.configured ? "configured" : "missing API key"
+                    }`
+                  : "Cloud OCR model",
+              },
+            ].map((provider) => {
+              const isActive = aiSettings?.provider === provider.id;
+              const isSaving = actionLoading === "saveSettings";
+
+              return (
+                <button
+                  key={provider.id}
+                  type="button"
+                  onClick={() => saveAiProvider(provider.id)}
+                  disabled={isSaving || isActive}
+                  className={`flex items-center justify-between rounded-lg border p-4 text-left transition disabled:cursor-not-allowed ${
+                    isActive
+                      ? "border-zinc-900 bg-zinc-50"
+                      : "border-zinc-200 bg-white hover:border-zinc-400"
+                  }`}
+                >
+                  <span>
+                    <span className="block text-sm font-semibold text-zinc-900">
+                      {provider.title}
+                    </span>
+                    <span className="mt-1 block text-xs text-zinc-600">
+                      {provider.description}
+                    </span>
+                  </span>
+                  <span
+                    className={`relative h-6 w-11 rounded-full transition ${
+                      isActive ? "bg-zinc-900" : "bg-zinc-300"
+                    }`}
+                    aria-hidden="true"
+                  >
+                    <span
+                      className={`absolute top-1 h-4 w-4 rounded-full bg-white transition ${
+                        isActive ? "left-6" : "left-1"
+                      }`}
+                    />
+                  </span>
+                </button>
+              );
+            })}
+          </div>
+
+          {!aiSettings?.openai.configured ? (
+            <p className="mt-4 text-sm text-amber-700">
+              OpenAI is available after OPENAI_API_KEY is present on the server.
+            </p>
+          ) : null}
+        </section>
       ) : null}
 
       {activeTab === "verification" && loading ? (
